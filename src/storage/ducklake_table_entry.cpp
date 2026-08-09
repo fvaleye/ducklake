@@ -329,6 +329,23 @@ case_insensitive_set_t DuckLakeTableEntry::GetNotNullFields() const {
 	return result;
 }
 
+unique_ptr<BaseStatistics> DuckLakeTableEntry::GetNotNullStatistics(column_t column_id) {
+	//! column_id is a physical index here, matching GetStatistics below
+	auto &col = GetColumns().GetColumn(PhysicalIndex(column_id));
+	for (auto &constraint : GetConstraints()) {
+		if (constraint->type != ConstraintType::NOT_NULL) {
+			continue;
+		}
+		if (constraint->Cast<NotNullConstraint>().index != col.Logical()) {
+			continue;
+		}
+		auto stats = BaseStatistics::CreateUnknown(col.Type());
+		stats.Set(StatsInfo::CANNOT_HAVE_NULL_VALUES);
+		return stats.ToUnique();
+	}
+	return nullptr;
+}
+
 unique_ptr<BaseStatistics> DuckLakeTableEntry::GetStatistics(ClientContext &context, column_t column_id) {
 	auto table_stats = GetTableStats(context);
 	if (!table_stats) {

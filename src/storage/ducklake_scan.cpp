@@ -98,12 +98,13 @@ unique_ptr<BaseStatistics> DuckLakeStatistics(ClientContext &context, const Func
 	}
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<DuckLakeMultiFileList>();
-	if (file_list.HasTransactionLocalData()) {
-		// don't read stats if we have transaction-local inserts
-		// FIXME: we could unify the stats with the global stats
-		return nullptr;
-	}
 	auto &table = file_list.GetTable();
+	if (file_list.HasTransactionLocalData()) {
+		// transaction-local rows have no committed statistics, but a NOT NULL constraint still holds
+		// for them because it is enforced on insert
+		// FIXME: we could unify the remaining stats with the global stats
+		return table.GetNotNullStatistics(column_index);
+	}
 	return table.GetStatistics(context, column_index);
 }
 

@@ -1,0 +1,103 @@
+# name: test/sql/stats/count_star_optimization_transaction_local.test
+# description: A NOT NULL constraint still proves validity when a transaction has local inserts
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:__TEST_DIR__/txn_local_validity.ducklake' AS lake (DATA_PATH '__TEST_DIR__/txn_local_validity_files/')
+
+statement ok
+CREATE TABLE lake.events(device_type VARCHAR NOT NULL, uuid VARCHAR NOT NULL, note VARCHAR);
+
+statement ok
+INSERT INTO lake.events VALUES ('d0', 'a', NULL), ('d1', 'b', 'kept');
+
+# transaction-local rows have no committed statistics, but the constraint is enforced on insert, so
+# count over a NOT NULL column is still exact
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.events VALUES ('d0', 'c', NULL), ('d1', 'd', 'kept');
+
+query II
+SELECT count(uuid), count(*) FROM lake.events
+----
+4	4
+
+statement ok
+PRAGMA explain_output = PHYSICAL_ONLY;
+
+# the constraint alone is enough to rewrite the aggregate, so the counted column is not read
+query II
+EXPLAIN SELECT count(uuid) FROM lake.events
+----
+physical_plan	<REGEX>:.*count_star\(\).*
+
+# a nullable column has nothing to prove validity with, so it stays
+query II
+EXPLAIN SELECT count(note) FROM lake.events
+----
+physical_plan	<!REGEX>:.*count_star\(\).*
+
+statement ok
+RESET explain_output;
+
+# a nullable column must not be pruned, so its NULLs still have to be counted out
+query II
+SELECT count(note), count(*) FROM lake.events
+----
+2	4
+
+query II
+SELECT device_type, count(uuid) FROM lake.events GROUP BY device_type ORDER BY device_type
+----
+d0	2
+d1	2
+
+statement ok
+ROLLBACK
+
+query II
+SELECT count(uuid), count(*) FROM lake.events
+----
+2	2
+
+# the constraint can be dropped, after which the column must stop being treated as validated
+statement ok
+ALTER TABLE lake.events ALTER COLUMN uuid DROP NOT NULL
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.events VALUES ('d2', NULL, NULL)
+
+query II
+SELECT count(uuid), count(*) FROM lake.events
+----
+2	3
+
+statement ok
+ROLLBACK
+
+# transaction-local deletes and updates stay exact
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.events WHERE device_type = 'd0'
+
+query II
+SELECT count(uuid), count(*) FROM lake.events
+----
+1	1
+
+statement ok
+ROLLBACK
+
+statement ok
+DROP TABLE lake.events

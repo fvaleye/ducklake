@@ -108,6 +108,9 @@ public:
 
 public:
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
+	//! Validity derived from a NOT NULL constraint alone. Valid even when no committed column
+	//! statistics exist, because DuckLake enforces the constraint on insert
+	unique_ptr<BaseStatistics> GetNotNullStatistics(column_t column_id);
 
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
