@@ -1,0 +1,67 @@
+# name: test/sql/stats/count_star_net_row_count_cache.test
+# description: Repeated COUNT(*) reuses the net row count for one snapshot
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/count_star_net_row_count_cache', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT range::BIGINT AS i FROM range(500);
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory', storage_buffer_size => 0)
+
+query I
+SELECT COUNT(*) FROM ducklake.t;
+----
+500
+
+query I
+SELECT COUNT(*) FROM ducklake.t;
+----
+500
+
+query I
+SELECT COUNT(*)
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SUM(record_count)%'
+  AND query LIKE '%ducklake_data_file%'
+  AND query LIKE '%ducklake_delete_file%';
+----
+1
+
+statement ok
+CALL disable_logging()
+
+statement ok
+DELETE FROM ducklake.t WHERE i < 50;
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory', storage_buffer_size => 0)
+
+query I
+SELECT COUNT(*) FROM ducklake.t;
+----
+450
+
+query I
+SELECT COUNT(*) FROM ducklake.t;
+----
+450
+
+query I
+SELECT COUNT(*)
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SUM(record_count)%'
+  AND query LIKE '%ducklake_data_file%'
+  AND query LIKE '%ducklake_delete_file%';
+----
+1

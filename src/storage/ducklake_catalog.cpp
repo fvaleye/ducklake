@@ -162,6 +162,10 @@ optional_idx DuckLakeTableStatsCacheEntry::GetEstimatedCacheMemory() const {
 	return estimate;
 }
 
+optional_idx DuckLakeNetRowCountCacheEntry::GetEstimatedCacheMemory() const {
+	return sizeof(DuckLakeNetRowCountCacheEntry);
+}
+
 optional_idx DuckLakeSchemaCacheEntry::GetEstimatedCacheMemory() const {
 	return EstimateCatalogSetMemory(catalog_set);
 }
@@ -844,6 +848,19 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	return shared_ptr<DuckLakeTableStats>(std::move(entry), &raw->stats);
 }
 
+idx_t DuckLakeCatalog::GetNetRowCount(DuckLakeTransaction &transaction, DuckLakeTableEntry &table) {
+	auto &cache = GetObjectCacheInstance();
+	auto key = NetRowCountCacheKey(transaction.GetSnapshot().snapshot_id, table.GetTableId());
+	auto cached = cache.Get<DuckLakeNetRowCountCacheEntry>(key);
+	if (cached) {
+		return cached->row_count;
+	}
+
+	auto row_count = table.GetNetDataFileRowCount(transaction) + table.GetNetInlinedRowCount(transaction);
+	cache.Put(std::move(key), make_shared_ptr<DuckLakeNetRowCountCacheEntry>(row_count));
+	return row_count;
+}
+
 optional_ptr<SchemaCatalogEntry> DuckLakeCatalog::LookupSchema(CatalogTransaction transaction,
                                                                const EntryLookupInfo &schema_lookup,
                                                                OnEntryNotFound if_not_found) {
@@ -1111,6 +1128,11 @@ void DuckLakeCatalog::CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
 	                          next_file_id, table_id.index);
+}
+
+string DuckLakeCatalog::NetRowCountCacheKey(idx_t snapshot_id, TableIndex table_id) const {
+	return StringUtil::Format("ducklake:%s:%s:%s:net_row_count:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
+	                          snapshot_id, table_id.index);
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {

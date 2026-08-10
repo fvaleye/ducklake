@@ -58,6 +58,25 @@ struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	optional_idx GetEstimatedCacheMemory() const override;
 };
 
+//! Per-table net (delete-adjusted) row count, keyed by <snapshot_id, table_id>. The stats cache is
+//! keyed on next_file_id, which cannot be used here: an inlined deletion changes the net count
+//! without writing a file. Every commit takes a new snapshot id, so that is the version that moves
+//! whenever the count can.
+struct DuckLakeNetRowCountCacheEntry : public ObjectCacheEntry {
+	explicit DuckLakeNetRowCountCacheEntry(idx_t row_count_p) : row_count(row_count_p) {
+	}
+
+	idx_t row_count;
+
+	static string ObjectType() {
+		return "ducklake_net_row_count";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override;
+};
+
 //! Cache entry for a DuckLake schema version
 struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
 	explicit DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p)
@@ -178,6 +197,9 @@ public:
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, TableIndex table_id);
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                             TableIndex table_id);
+	//! Net (delete-adjusted) row count of a table at the transaction snapshot. Only valid when the table
+	//! has no transaction-local changes; DuckLakeGetPartitionStats enforces this before calling.
+	idx_t GetNetRowCount(DuckLakeTransaction &transaction, DuckLakeTableEntry &table);
 
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        SchemaIndex schema_id);
@@ -317,6 +339,7 @@ private:
 	void PinSchemaForQuery(DuckLakeTransaction &transaction, shared_ptr<DuckLakeSchemaCacheEntry> entry);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
+	string NetRowCountCacheKey(idx_t snapshot_id, TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	string SchemaPinStateKey() const;
 	ObjectCache &GetObjectCacheInstance();
