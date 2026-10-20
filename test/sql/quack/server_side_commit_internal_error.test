@@ -29,10 +29,14 @@ CREATE TABLE other.u (id BIGINT)
 statement ok
 DELETE FROM __ducklake_metadata_lake.lake_a.ducklake_inlined_data_tables
 
+# an internal error is not a conflict, so it is reported as is instead of being retried
+statement ok
+SET ducklake_max_retry_count = 2
+
 statement error
 INSERT INTO lake.t VALUES (2)
 ----
-internal error
+<REGEX>:.*internal error: Failed to commit DuckLake transaction\.\s*Server-side ducklake_commit: no inlined-data table.*
 
 statement ok
 INSERT INTO other.u VALUES (1)
