@@ -1,89 +1,92 @@
-# DuckLake Data-Change Marker Implementation Plan (v10, 2026-10-20)
+# DuckLake Data-Change Marker Implementation Plan (v11, 2026-10-20)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Readers can tell, per snapshot and per table, whether a commit logically inserted or deleted data, or only did maintenance (flushes, compaction). Today they guess from physical change types.
 
-**Decision (2026-10-20):** Florian chose option B, a column in the next catalog version. Option A stays as the spec docs fix (S0) and as the reader fallback for `NULL` rows.
+**Decision (2026-10-20):** Florian chose option B, a column in the next catalog version. Option A stays as the reader fallback for `NULL` rows and as a docs fix (S0). A second direction, B2, stores the same value in a separate table without a version bump, so that 1.1 binaries keep working; its POC decides whether it goes into the ask as an alternative.
 
 ## Upstream gate
 
-Option B changes the catalog specification, so upstream treats it as a feature. The rule was restated twice on 2026-10-12/13:
+Option B changes the catalog specification, so upstream treats it as a feature:
 
-- PeterVanHolland on #1429 and #1626: "Features are developed in collaboration with the DuckDB Labs team to keep them compatible with the roadmap. Please open a discussion first. Once it is approved, the feature can be developed."
+- pdet's bot (PeterVanHolland, bio "@pdet's robot friend") posted the same template on #1355, #1429, #1626 (2026-10-12) and #1471 (2026-10-13). On #1429: "Features are developed in collaboration with the DuckDB Labs team to keep them compatible with the roadmap. Please open a discussion first. Once it is approved, the feature can be developed."
 - pdet closed #1429 "as it is a feature and must be discussed beforehand, possibly for DuckLake 2.0", said of #1626 "this is prolly sth for 2.0", and closed #1703 with "discuss after the next release".
+- pdet on #1815 (2026-10-20), about one SQLite index: "index creation is a spec change for a given catalog, with trade-offs that require a more in-depth analysis, let's maybe create a discussion first". So B2's separate table is a spec change too, version bump or not.
 - Catalog versions belong to the maintainers. Every one was opened by pdet or Mytherin (#252, #506, #784, #966, #1017, #1799), and pdet told an outside PR to stay on the existing dev version ("you can just keep it under `1.1-dev1`", #1102, 2026-06-23).
-- Spec questions go to ducklake-web issues (pdet on discussion #934, 2026-04-24).
+
+Public Discussions rarely get an answer:
+
+- 33 of 181 Ideas and General discussions have a reply from pdet, Mytherin or guillesd other than the closing note pdet posted on 25 of them on 2026-10-16. Of the 28 created since 2026-05-01, none has (GraphQL dump of all 264 discussions, 2026-10-20).
+- The discussions the bot sent contributors to (#913, #1454, #1630) have no maintainer reply.
+- The schema change that did land from outside is Altertable's own. redox opened Discussion #1077 (no maintainer reply), then PR #1102, which added the `ducklake_view_column_tag` table and a migration. Its body ends "Internal Ref https://github.com/duckdblabs/altertable/issues/7", and pdet merged it on 2026-07-20.
 
 What this means for the plan:
 
-1. **No C-task PR before a maintainer approves the design in a Discussion.** The POC stays a branch on the fork, linked from the Discussion as evidence. A working PoC has drawn a positive reply before (pdet on discussion #1644: "This sounds awesome!").
-2. **Post after 1.1 is published** (tentatively 2026-10-21), per #1703.
-3. **Ask which version carries it,** and expect 2.0 as an answer. `1.2-dev1` below is a placeholder.
-4. **Keep the ask small and generic.** pdet, Mytherin or guillesd replied in 55 of 181 Ideas and General discussions (all of them, fetched 2026-10-20). When pdet engaged on a design (#627), he came back after "a quick internal discussion" with a more generic shape (`min_merge_size`/`max_merge_size`). Say which parts are negotiable: the name, the encoding, the version.
-5. **Pre-empt the recurring review asks** once code is allowed (`~/.claude/skills/ducklake-dev/references/maintainers.md`): tests enumerated and split by scenario, SQL in the metadata manager per backend, every behaviour change named (`snapshots()` gaining a column is one), throw on invalid state.
+1. **Route:** raise the proposal through Altertable's DuckDB Labs channel, the one #1102 referenced, and post a short public Discussion as the record. Whether that channel is active, and whether to use it, is Florian's call (`duckdblabs/altertable` is private, so this was not checked). Timebox the Discussion.
+2. **No C-task PR before a maintainer approves the design.** The POC stays a branch on the fork, linked as evidence.
+3. **Post after 1.1 is published** (2026-10-21, ducklake-web#437), per #1703.
+4. **Ask which version carries it,** and expect 2.0 as an answer. `1.2-dev1` below is a placeholder.
+5. **Keep it short, with one ask.** The posts that drew a design reply were short with one proposal: #627 (1,368 characters; pdet came back after "a quick internal discussion" with a more generic `min_merge_size`/`max_merge_size`) and #1077 (1,353 characters, led to #1102). The unanswered #1630 is 2,145. Say which parts are negotiable: the name, the encoding, the version.
+6. **Pre-empt the recurring review asks** once code is allowed (`~/.claude/skills/ducklake-dev/references/maintainers.md`): tests enumerated and split by scenario, SQL in the metadata manager per backend, every behaviour change named (`snapshots()` gaining a column is one), throw on invalid state. Expect the bot to probe for races, as it did on #1429.
 
-## What changed since v9
+## What changed since v10 (adversarial review and probes, `scratchpad/v10-review/`, `scratchpad/probe-flushdel/`)
 
-- **Track 0 is done.**
-  - U1 merged as #1807, and the RESET insert fix as #1808 (both by pdet, 2026-10-19).
-  - The RESET plus `ducklake_add_data_files` case was fixed upstream by `6fd1906e` (Peter Van Holland, 2026-10-19).
-  - The retry fix is rebased on `ed31fddd` with a new trigger, an internal error in a Quack server-side commit (`test/sql/quack/server_side_commit_internal_error.test`), since the RESET trigger is gone. It is on `fvaleye/fl/classify-commit-retries-without-stack-traces`, with its description drafted, for Florian to open. The v9 ordering constraint is obsolete.
-- **Option A has one known error left:** the flush of inlined deletes. U1 is fixed.
-- **D0 Step 1 is sized (locally).** The method and numbers are in Evidence below. In an Altertable-like workload, 8 of the 10 snapshot and table pairs tagged `deleted_from_table` were flushes that changed no row.
-- **The acceptance oracle is row content, not the change feed.** By upstream design, `ducklake_rewrite_data_files` makes `table_changes` emit identical pre-image and post-image rows for every surviving row (#1571 expected output, #1589 merged 2026-10-09). The oracle is `EXCEPT ALL` both ways between `AT (VERSION => S-1)` and `S`.
-- **Precedent corrected:**
-  - Delta's base protocol keeps `commitInfo.dataChange` optional, with readers falling back to per-file flags.
-  - RFC #7503 (merged 2026-09-28) makes it required under `adaptiveMetadata`, because "a reader tailing the log cannot recover the answer" from physical actions. That is DuckLake's flush case.
-  - #7524 only filled the `commitLarge` path.
-  - #7658 reads the field behind an off-by-default config and records telemetry when it disagrees with the file actions.
-- **Roadmap corrected:** "Materialized views and incremental maintenance" is under "Future Work / Looking for Funding" on ducklake.select/roadmap, not a 2.0 goal.
-- **Naming:** the docs call `table_changes` the "Data Change Feed" (`/docs/stable/duckdb/advanced_features/data_change_feed`), and that feed reports rewrites as updates. A `data_changes` column with the opposite meaning invites confusion, so the name becomes an open ask.
-- **The POC needs a rebase:** `option-b.diff` no longer applies to `ed31fddd` (`ducklake_metadata_manager.cpp`, `ducklake_server_side_commit.cpp`, `ducklake_transaction.cpp`).
+- **Route:** the Discussion-only route is likely to meet silence (numbers above); #1102 is the precedent to follow.
+- **S0 shrinks:** pdet's ducklake-web#437 ("Update documentation for DuckLake 1.1", opened 2026-10-20) already documents every change type and marks `compacted_table` as written only by older versions. It copies `docs/stable` to `docs/1.0` and edits `stable` in place, so there is no preview tree to wait for.
+- **Altertable claim corrected:** backend #4413 kept `SET GLOBAL ducklake_default_data_inlining_row_limit = 0` (`settings.rs:83`) and made inlining opt-in per catalog (`databases.data_inlining_row_limit`). The over-report reaches only catalogs that opt in.
+- **Reader fallback fixed:** datafusion-ducklake writes `changes_made` as `NULL` first and appends later (`metadata_writer_postgres_single.rs:521-536`), so a missing or `NULL` `changes_made` must count as a change.
+- **A fourth classifier:** datafusion-ducklake `src/change_detection.rs` (2026-10-16) documents the same over-report (lines 26-32) and counts `rewrite_data_files` as a change (lines 40-42).
+- **One more collision:** `BEGIN; CALL ducklake_flush_inlined_data(...); DELETE ...; COMMIT` records `deleted_from_table:T,inline_flush:T` for a real 1-row delete, the same tokens as the 7 flushes that changed nothing (`probe-flushdel`, snapshot 7, DuckDB and SQLite).
+- **Not reproduced:** datafusion-ducklake's claim (`change_detection.rs:38-40`) that a DELETE committed with a flush records only `inline_flush`. Four orders on DuckDB and SQLite catalogs all recorded the delete (`probe-flushdel`). Postgres and Quack not run.
+- **Bot fork:** PeterVanHolland/ducklake has 59 open PRs that reach upstream in batches (#1817). Relevant: PVH#114 rewrites the same `RetryOnError` line as the retry fix; PVH#58 validates metadata column names, order and types per catalog version on attach (it ignores tables it does not expect, so B2's table passes); PVH#122 reworks the stats read for the tables a commit changes; PVH#118 retries an attach whose migration races another.
+- **Precedent, line numbers, migration shape and file lists** corrected below.
+
+Carried from v10: Track 0 is done. U1 (#1807) and the RESET insert fix (#1808) were authored by Florian and merged by pdet on 2026-10-19; `6fd1906e` fixed RESET with `ducklake_add_data_files`. The retry fix is on `fvaleye/fl/classify-commit-retries-without-stack-traces` for Florian to open. The acceptance oracle is row content, not `table_changes`, which reports a rewrite as identical update images by design (#1571, #1589). Materialized views are "Future Work / Looking for Funding" on the roadmap.
 
 ## Option B
 
-- **Storage:** a nullable column `data_changes VARCHAR` on `ducklake_snapshot_changes` (name to be agreed). It holds logical entries in the grammar DuckLake already parses (`inserted_into_table:<id>`, `deleted_from_table:<id>`).
+- **Storage:** a nullable column `data_changes VARCHAR`, last in `ducklake_snapshot_changes` (name to be agreed). It holds logical entries in the grammar DuckLake already parses (`inserted_into_table:<id>`, `deleted_from_table:<id>`).
 - **Values:** `NULL` means "not recorded" (old rows, older or third-party writers); `''` means "recorded, no data change".
-- **Reader fallback:** for a `NULL` row, classify `changes_made` with the option A table. It never under-reports, so the fallback is safe.
+- **Reader fallback:** for a `NULL` value, classify `changes_made` with the option A table; if `changes_made` is also `NULL`, or the row is missing, count the snapshot as a data change for every table. Both directions only over-report.
 - **Computation:** at commit, in `DuckLakeTransaction::AddTableChanges`, the path both client and server-side commits use.
 - **Reading:** `snapshots()` exposes it as a new `data_changes` MAP column.
-- **Version:** a new catalog version after `V1_1`, chosen by the maintainers, with a `MigrateV11` step.
+- **Version:** a new catalog version after `V1_1`, chosen by the maintainers.
 - **Untouched:** conflict detection and the existing `changes_made` string.
 
-**Tech Stack:** C++ DuckDB extension (clang-format 11.0.1), sqllogictest.
+**Tech Stack:** C++ DuckDB extension (clang-format 11.0.1), sqllogictest. Line numbers are at upstream `ed31fddd`.
 
 ## Evidence
 
 | Question | Answer | Evidence |
 |---|---|---|
-| How often does option A over-report? | 8 of 81 pairs; 8 of the 10 `deleted_from_table` pairs | Local run on `ed31fddd`, identical on DuckDB, SQLite and Postgres catalogs. Workload: inlining limit 10, small and large inserts, small deletes, MERGE upserts, an append-only table, flush every 3 rounds, `merge_adjacent_files` every 4, `rewrite_data_files` every 6, 12 rounds. Option A agrees on all 65 data pairs and all 8 maintenance pairs (`merge_adjacent`, `rewrite_delete`, an insert-only flush). It over-reports 7 `deleted_from_table+inline_flush` flushes and 1 `deleted_from_table` flush. It under-reports nothing. Synthetic, not production. Scripts: `.claude/logical-data-change/oracle/` |
-| Can a token rule fix A? | No | A flush of only inlined deletes records `deleted_from_table:T` alone (`ducklake_transaction.cpp:1085-1115`: `inline_flush` only for data files with a begin snapshot). In the run, snapshot 76 deleted 100 rows and snapshot 78 changed none, and both are `deleted_from_table:1`. The catalog cannot tell them apart later: `ducklake_delete_file` has no source column, and a deletion vector's `begin_snapshot` can predate its commit (`x4_dv_twice`) |
-| Does option B work? | Yes, on `1a4d6ae2` | POC `option-b.diff`, 23 files, +470/−30 formatted. The whole suite passes under the default, Postgres, SQLite, Quack, `no_inline`, `deletion_vectors` and `ducklake_version` configs. `data_changes` matches the Definition on all 44 v6 scenarios. Details in "POC record" below |
-| What do released 1.1 binaries do with a catalog at the new version? | Refuse at ATTACH, readers included | `DuckLakeVersionFromString` throws `Unsupported ducklake_version '1.2-dev1'` (`ducklake_version.cpp:17-24`), with no options, `AUTOMATIC_MIGRATION`, `READ_ONLY` or a pinned `'1.1'`. ducklake-sdk, brikk, pg_ducklake's native writer and moraine also refuse an unknown version. Only datafusion-ducklake does not check it, and it writes named columns, so its snapshots get `NULL` |
-| Who classifies today? | Three consumers, and they disagree | quack-on-demand counts `rewrite_delete` as a data touch, moraine as compaction, viaduck as a delete. delta_export always writes `dataChange: true`. No upstream work or Discussion on this as of 2026-10-20 |
-| Token in `changes_made` or column? | Column | moraine fails closed on unknown tokens (`has_unknown`), datafusion-ducklake errors on them (`snapshot_changes.rs:55`), and older DuckLake does not know them |
-| Precedent? | Commit-level flag, required where physical actions cannot answer | Delta `commitInfo.dataChange` (RFC #7503, #7524, #7658, see above). Paimon nullable `operation` beside `CommitKind` (#8236). Iceberg's required snapshot `operation`. A version bump carried the previous snapshot metadata too: `author`/`commit_message`/`commit_extra_info` came with `MigrateV02` (`ducklake_metadata_manager.cpp:387-397`) |
-| Spec status | Drifted | The live spec page lists `compacted_table` and omits five types DuckLake writes (ducklake-web#37, ducklake-web#242, both open). It describes the table as existing "for easier conflict detection" |
+| How often does option A over-report? | 8 of 81 pairs; 8 of the 10 `deleted_from_table` pairs | Local run on `ed31fddd`, identical on DuckDB, SQLite and Postgres catalogs. Workload: DuckLake's default inlining limit of 10 (Altertable sets 0 unless a catalog opts in), small and large inserts, small deletes, MERGE upserts, an append-only table, flush every 3 rounds, `merge_adjacent_files` every 4, `rewrite_data_files` every 6, 12 rounds. Option A agrees on all 65 data pairs and all 8 maintenance pairs. It over-reports 7 `deleted_from_table+inline_flush` flushes and 1 `deleted_from_table` flush, and under-reports nothing. Synthetic, not production. Scripts: `.claude/logical-data-change/oracle/` |
+| Can a token rule fix A? | No | A flush of only inlined deletes records `deleted_from_table:T` alone (`ducklake_transaction.cpp:1086-1130`: `inline_flush` only for data files with a begin snapshot). Snapshot 76 deleted 100 rows and snapshot 78 changed none; both are `deleted_from_table:1`. A real delete after a flush in one transaction records `deleted_from_table,inline_flush`, like 7 pure flushes. The catalog cannot tell them apart later: a deletion vector's `begin_snapshot` can predate its commit (`x4_dv_twice`), and inlined deletes have no file |
+| Does option B work? | Yes, on `1a4d6ae2`; port to `ed31fddd` in progress | POC `option-b.diff`, 23 files, +470/−30 formatted. The whole suite passed under the default, Postgres, SQLite, Quack, `no_inline`, `deletion_vectors` and `ducklake_version` configs. `data_changes` matched the Definition on all 44 v6 scenarios. See "POC record" |
+| What do released 1.1 binaries do with a catalog at the new version? | Refuse at ATTACH, readers included | `DuckLakeVersionFromString` throws `Unsupported ducklake_version '1.2-dev1'` (`ducklake_version.cpp:17-24`), with no options, `AUTOMATIC_MIGRATION`, `READ_ONLY` or a pinned `'1.1'`. Unverified for third parties: ducklake-sdk, brikk, pg_ducklake and moraine refusing an unknown version |
+| Who classifies today? | Four consumers, and they disagree | datafusion-ducklake counts `rewrite_data_files` as a change and documents the flush over-report (`change_detection.rs:26-42`); moraine counts `rewrite_delete` and `inline_flush` as compaction (`operations.rs:145, 544-551`); viaduck treats `rewrite_delete` as a delete (`single_destination.py:535-539`); quack-on-demand counts `rewrite_delete` as a data touch (unverified in v11). No upstream work or Discussion on this as of 2026-10-20 |
+| Token in `changes_made` or column? | Column | Both need a version bump: today's parser throws `Unsupported change type` on an unknown token (`ducklake_transaction_changes.cpp:67-73`), even in a concurrent writer's conflict check. A token also breaks version-unaware readers (datafusion-ducklake `snapshot_changes.rs:55`, moraine `has_unknown`) and needs a conflict-check rule. A column is ignored by both |
+| Precedent? | A commit-level flag where physical actions cannot answer | Delta requires a per-file `dataChange` on add and remove (PROTOCOL.md). RFC #7503 (merged 2026-09-28) makes the commit-level `commitInfo.dataChange` required under `adaptiveMetadata`, because there "a reader tailing the log cannot recover the answer"; DuckLake has neither. #7524 filled the `commitLarge` path; #7658 reads the field behind an off-by-default config and records telemetry when it disagrees with the file actions. Paimon and Iceberg keep a per-snapshot `operation` (#8236; Iceberg `summary.operation`), but their snapshots belong to one table, while a DuckLake snapshot spans tables, so the value must be per table. `author`/`commit_message`/`commit_extra_info` also came with a version bump (`MigrateV02`, `ducklake_metadata_manager.cpp:383-397`) |
+| Spec status | Fixed by ducklake-web#437, except two points | #437 lists every change type. It still says `deleted_from_table` means "the snapshot deleted data from the given table", which a flush of inlined deletes contradicts, and keeps the table's stated purpose "for easier conflict detection". ducklake-web#37 and #242 are open |
 
 ## Global Constraints
 
-- `changes_made` and every conflict check stay byte-for-byte as today (`STRING_AGG(changes_made)` at `ducklake_metadata_manager.cpp:4647`). `tables_deleted_from` keeps counting `FLUSH` delete files; the new sets are separate.
-- Write `data_changes` with `SQLString`, not `SQLStringOrNull` (`ducklake_metadata_manager.cpp:4617-4622`), so `''` stays distinct from `NULL`.
-- Write it only on a catalog at the new version. Both version reads need it: `context.supports_v1_1_metadata` (`ducklake_transaction.cpp:1658`) and `ReadSupportsV1_1Metadata` (`ducklake_server_side_commit.cpp:545-552`). 1.0 and 1.1 catalogs keep five columns.
-- Every insert into `ducklake_snapshot_changes` names its columns, including the snapshot-0 insert (`ducklake_metadata_manager.cpp:238`).
-- Normative rules, from prior art: write `''` only when certain and over-report otherwise; `data_changes` is never read by conflict detection (delta-rs #4851); each entry maps to a token of the same commit for the same table, with `inserted_into_table` coming from `inserted_into_table` or `inlined_insert`, and `deleted_from_table` from `deleted_from_table` or `inlined_delete`. This subset rule is what lets a reader check the column against `changes_made`, as Delta's #7658 telemetry does against file actions.
-- Every new or updated test pins `DUCKLAKE_VERSION`, because CI's `test/configs/ducklake_version.json` still sets 1.0 (`DuckLakeVersion.yml:70`).
+- `changes_made` and every conflict check stay byte-for-byte as today (`STRING_AGG(changes_made)` at `ducklake_metadata_manager.cpp:4727`). `tables_deleted_from` keeps counting `FLUSH` delete files; the new sets are separate.
+- Write `data_changes` with `SQLString`, not `SQLStringOrNull` (`ducklake_metadata_manager.cpp:4697-4710`), so `''` stays distinct from `NULL`.
+- Write it only on a catalog at the new version. Both version reads need it: `context.supports_v1_1_metadata` (`ducklake_transaction.cpp:1674`) and `ReadSupportsV1_1Metadata` (`ducklake_server_side_commit.cpp:546-554`). 1.0 and 1.1 catalogs keep five columns.
+- Every insert into `ducklake_snapshot_changes` names its columns: the snapshot-0 insert (`ducklake_metadata_manager.cpp:237`), `WriteSnapshotChangesSql` (`:4707`) and three positional fixtures.
+- Normative rules, from prior art: write `''` only when certain and over-report otherwise; `data_changes` is never read by conflict detection (delta-rs #4851); each entry maps to a token of the same commit for the same table, with `inserted_into_table` coming from `inserted_into_table` or `inlined_insert`, and `deleted_from_table` from `deleted_from_table` or `inlined_delete`. This subset rule lets a reader check the column against `changes_made`, as Delta's #7658 telemetry does against file actions.
+- Every new or updated test pins `DUCKLAKE_VERSION`, because CI's `test/configs/ducklake_version.json` still sets 1.0 (`DuckLakeVersion.yml:70`). Pinning to a dev version is native (29 tests pin `'1.1-dev1'`).
 - AGENTS.md style; `make format-fix`; the DuckDB, SQLite, Postgres and Quack backends.
-- Upstream commits: a signed title line only. Never open a PR, issue or Discussion; draft text to files for Florian. No C-task PR before Discussion approval.
+- Upstream commits: a signed title line only. Never open a PR, issue or Discussion; draft text to files for Florian. No C-task PR before approval.
 
 ## Definition (logical entries written for table T)
 
-| Entry | When (signals in `AddTableChanges`, `ducklake_transaction.cpp:1085-1115`) |
+| Entry | When (signals in `AddTableChanges`, `ducklake_transaction.cpp:1086-1130`) |
 |---|---|
 | `inserted_into_table:T` | A new in-memory data file without `begin_snapshot` (INSERT, `add_data_files`; in the catalog every file has one, probe `s02`); or `new_inlined_data && new_inlined_data->Count() > 0` |
-| `deleted_from_table:T` | A `new_delete_files` entry with `source == REGULAR`; a REGULAR delete on a flushed file; `new_inlined_data_deletes` or `new_inlined_file_deletes`; or T in the state's `tables_deleted_from`, which `WriteSnapshotChanges` copies (whole-file drops; union it) |
-| Neither | Compaction (exclusive with DML), flushes (outputs have `begin_snapshot`, deletes have `source == FLUSH`), DDL, renames, zero-row writes, net-zero inserts |
+| `deleted_from_table:T` | A `new_delete_files` entry with `source == REGULAR`; a REGULAR delete on a flushed file; `new_inlined_data_deletes` or `new_inlined_file_deletes`; or T in the state's `tables_deleted_from`, which `WriteSnapshotChanges` copies (`ducklake_transaction_state.cpp:392`; whole-file drops, filled only by `DropFile`; union it) |
+| Neither | Compaction (exclusive with DML, `:421-424`), flushes (outputs have `begin_snapshot`, deletes have `source == FLUSH`), DDL, renames, zero-row writes, net-zero inserts |
 | UPDATE | Both entries, even for `SET a = a` |
 | DROP TABLE | Nothing, unless DML ran first in the same transaction; this matches today's tokens (`s01_dml_drop`), and table ids are never reused |
 
@@ -105,59 +108,62 @@ Option A applies the same Definition to the tokens:
 1. Migrating a 1.1 catalog to the new version adds the column with `NULL` on every old row. Owned by C1.
 2. A DDL-only commit writes `''`, not `NULL`. Owned by C2.
 3. 1.0 and 1.1 catalogs write and read no column. Owned by C1 and C2.
-4. Server-side commit (Quack) writes the same entries: it reaches the same `WriteSnapshotChanges` (`ducklake_server_side_commit.cpp:113-127`) but reads the version separately (`:545-552`). Owned by C2.
-5. Concurrent commits with retries; SQLite reports `database is locked`, so these cases go in their own file. Owned by C2.
+4. Server-side commit (Quack) writes the same entries: it reaches the same `WriteSnapshotChanges` (`ducklake_server_side_commit.cpp:113-121`) but reads the version separately (`:546-554`). Owned by C2.
+5. Concurrent commits with retries; each retry recomputes from a fresh copy (`ducklake_transaction_state.cpp:2662`). SQLite reports `database is locked`, so these cases go in their own file. Owned by C2.
 6. `data_changes` entries are a subset of `changes_made` on every commit. Owned by C2.
 
 ## POC record (`.claude/logical-data-change/poc/`, on `1a4d6ae2`)
 
 - With the version kept opt-in, only 3 existing tests change (error text). Making `1.2-dev1` the default breaks 5. Its 3 new tests fail without it.
 - `''` survives a round trip through Postgres and SQLite as distinct from `NULL`.
-- 1.0 and 1.1 migrate to `1.2-dev1` with `NULL` on old rows, including with `METADATA_SCHEMA`. A pinned 1.1 target stops at 1.1, thanks to the repeated `>= target` check before `MigrateV11`.
-- Retries recompute `data_changes` with the final table ids, even when a concurrent CREATE remaps a CTAS. 200 tables in one commit list all ids, and `expire_snapshots` carries the column.
-- Two processes migrating one Postgres catalog at once never failed in 27 overlapping trials, the same as the 1.0 → 1.1 control (25 trials). The migration is one metadata transaction with no lock; a loser falls into the upstream attach retry (`ducklake_initializer.cpp:134-163`). SQLite was not run.
-- **Open design points for the Discussion:**
-  - While `1.2-dev1` is not `DUCKLAKE_LATEST_VERSION`, `AUTOMATIC_MIGRATION` on a `1.2-dev1` catalog fails with "Cannot downgrade" (`ResolveTargetVersion`). This disappears once the maintainers make the new version the latest.
+- 1.0 and 1.1 migrate to `1.2-dev1` with `NULL` on old rows, including with `METADATA_SCHEMA`. A pinned 1.1 target stops at 1.1.
+- Retries recompute `data_changes` with the final table ids, even when a concurrent CREATE remaps a CTAS. 200 tables in one commit list all ids.
+- Two processes migrating one Postgres catalog at once never failed in 27 overlapping trials, the same as the 1.0 → 1.1 control (25 trials). A loser falls into the upstream attach retry (`ducklake_initializer.cpp:133-162`). SQLite was not run, and PVH#118 shows a migration race on Quack.
+- **Open design points for the ask:**
+  - While `1.2-dev1` is not `DUCKLAKE_LATEST_VERSION`, `AUTOMATIC_MIGRATION` on a `1.2-dev1` catalog fails with "Cannot downgrade" (`ducklake_initializer.cpp:242-247, 338-341`). This disappears once the new version is the latest.
   - The POC adds `data_changes` to `snapshots()` on 1.0 and 1.1 catalogs too (always `NULL`), which changes `SELECT *` for everyone.
-  - A 1.1 Quack server lets a new client migrate the catalog, then refuses every data-only commit with `Unsupported ducklake_version '1.2-dev1'` (`ducklake_server_side_commit.cpp:99`, `:543-552`), while DDL commits still run client-side. Nothing is half-written, but writes stop until the server is upgraded.
-- The migration test must scope its `information_schema.columns` counts by schema, or extra metadata schemas in a Postgres database break it.
+  - A 1.1 Quack server lets a new client migrate the catalog, then refuses every data-only commit with `Unsupported ducklake_version '1.2-dev1'` (`ducklake_server_side_commit.cpp:99`, `:546-554`), while DDL commits still run client-side. Writes stop until the server is upgraded.
 
 ---
 
-### Task S0: ducklake-web spec docs fix (option A, and a prerequisite for B)
+### Task S0: ducklake-web docs follow-up (independent of the Discussion)
 
-- [ ] Write `scratchpad/plans/ducklake_web_snapshot_changes_spec.md`. Document every type DuckLake writes today (`inlined_insert`, `inlined_delete`, `inline_flush`, `merge_adjacent`, `rewrite_delete`), mark `compacted_table` as written only by older catalogs, add the option A classification table, and state that the flush of inlined deletes is recorded as `deleted_from_table`. This describes current behavior, so it is a docs fix, not a spec change, and it does not wait for the Discussion. Target it after the 1.1 docs swap: past releases copied a preview tree and then swapped it in (ducklake-web #297, #299, #317), so a PR against `stable` now would be lost. Document both vocabularies (`tables_inserted_into` in `snapshots()` against the stored `inserted_into_table`) and both flush spellings (`flushed_inlined` in 0.3 and earlier, `inline_flush` since). Reference ducklake-web#37 and #242. Florian opens it.
+- [ ] After ducklake-web#437 merges, write `scratchpad/plans/ducklake_web_snapshot_changes_flush.md` against it, adding only what it lacks: the flush of inlined deletes is recorded as `deleted_from_table`, with or without `inline_flush`; the option A classification table; the `snapshots()` keys against the stored tokens (`tables_inserted_into` against `inserted_into_table`, `flushed_inlined` against `inline_flush`); and that DuckLake before 0.4 stored `flushed_inlined`. Reference ducklake-web#37 and #242. Florian opens it.
 
-### Task D0 (gate): Discussion draft
+### Task D0 (gate): the ask
 
-- [x] **Step 1: Size the gap.** Done locally (Evidence, first row). A production count stays open: the catalog cannot identify flush deletes afterwards, so it needs `max(snapshot_id)` recorded around every flush and `CHECKPOINT` (`ducklake_checkpoint.cpp:21`).
-- [ ] **Step 2: Rebase the POC** onto the latest main, rerun its tests and the oracle workload, and push it to a fork branch. No PR.
-- [ ] **Step 3:** Write `scratchpad/plans/ducklake_data_changes_discussion.md`, Ideas category, in the shape of #1630 (problem, design, alignment with other formats):
-  - **Problem:** `changes_made` exists for conflict detection, and consumers classifying it disagree (links). A flush of inlined deletes records the same tokens as a DELETE, so no reader can tell them apart; give the measured 8 of 10.
-  - **Proposal:** the column, the Definition, the `NULL`/`''` semantics, the normative rules, and the fallback to the option A table for `NULL`.
-  - **Compatibility:** released 1.1 binaries refuse to attach a catalog at the new version, so they fail loudly before reading or writing. A 1.1 Quack server refuses data-only commits after the migration.
-  - **Rejected alternatives:** a new token (breaks older DuckLake, moraine, datafusion-ducklake); recording `inline_flush` on deletion flushes, or reclassifying existing types (both change tokens that conflict detection reads, `ducklake_transaction_state.cpp:284-328`; v5 `explore_flush/race_replace` gave 169 rows instead of 99); a separate table; a per-snapshot `operation`; filtering `table_changes` (it reports row images, and rewrites by design).
-  - **Precedent:** Delta (RFC #7503 required under `adaptiveMetadata` for the same reason, #7658 telemetry), Paimon `operation` (#8236), Iceberg `operation`.
-  - **Asks:** whether a logical change field is welcome, and in which version (next 1.x or 2.0); the name, given the "Data Change Feed"; `NULL` vs `''`; whether `snapshots()` shows the column on old catalogs; the Quack upgrade order.
-  - **Evidence link:** the rebased POC branch.
-- [ ] **Step 4:** Florian posts it after 1.1 is published. No C-task PR before a maintainer approves.
+- [x] **Step 1: Size the gap.** Done locally (Evidence, first row). A production count stays open: the catalog cannot identify flush deletes afterwards, so it needs `max(snapshot_id)` recorded around every flush and `CHECKPOINT` (`ducklake_checkpoint.cpp:21-31`), on a catalog that opts into inlining.
+- [ ] **Step 2: POCs on the latest main.** B (column) rebased onto `ed31fddd`, and B2 (separate table, no bump). Each must pass the CI configs and show zero over-reports and zero under-reports against the content oracle on all three catalogs; B2 must also show what an unmodified 1.1 binary does. Push each to a fork branch after an independent verification. No PR.
+- [ ] **Step 3:** Write `scratchpad/plans/ducklake_data_changes_discussion.md`, Ideas category, about 1,400 characters, in the shape of #627 and #1077:
+  - **One ask:** would you accept a nullable per-table logical change field in the next version, or should it wait for 2.0?
+  - **Why:** `changes_made` exists for conflict detection, so a flush of inlined deletes records the same tokens as a DELETE; 8 of 10 `deleted_from_table` pairs in the measured workload were flushes; four consumers classify differently, and datafusion-ducklake documents the same problem.
+  - **Proposed defaults:** the column, `NULL` for unknown and `''` for no change, the subset rule, and the fallback. The name is open because of the "Data Change Feed".
+  - **Link** the POC branch, with a README holding the Definition, the rejected alternatives and the compatibility notes, so the post stays short.
+- [ ] **Step 4:** Florian raises it through the DuckDB Labs channel and posts the Discussion after 1.1 is published. No C-task PR before a maintainer approves.
+
+Rejected alternatives, for the POC README:
+- A new token: needs the same version bump, breaks version-unaware readers, and needs a conflict-check rule.
+- Recording `inline_flush` on deletion flushes, or reclassifying existing types: both change tokens that conflict detection reads (`ducklake_transaction_state.cpp:281-328`); v5 `explore_flush/race_replace` gave 169 rows instead of 99.
+- A `source` column on `ducklake_delete_file` (the in-memory `DeleteFileSource` exists, `ducklake_data_file.hpp:31,57`): a delete file's `begin_snapshot` can predate its commit, so a reader cannot tell which files a snapshot committed, and inlined deletes have no file.
+- A per-snapshot `operation`: a DuckLake snapshot spans tables, so the value must be per table.
+- Filtering `table_changes`: it reports row images, and rewrites by design.
+- A separate table: B2, pending its POC.
 
 ### Task C1 (option B, after approval): next catalog version and the column
 
 **Files:**
-- `src/include/common/ducklake_version.hpp` and `src/common/ducklake_version.cpp`: the new enum value, its string, `DUCKLAKE_LATEST_VERSION`, and `ParseWritableDuckLakeVersion`. If the maintainers open the next version themselves, rebase on theirs.
-- `src/storage/ducklake_initializer.cpp`: a `MigrateV11` step from `V1_1`, guarded by `catalog_version < target_version`; `ResolveTargetVersion` accepts the new version; a `SetVersionedMetadataManager` branch.
-- `src/include/storage/ducklake_metadata_manager.hpp` and `ducklake_metadata_manager.cpp`: a new virtual `GetSnapshotChangesTableStatement()` beside `GetSchemaTableStatement()`; the base keeps five columns.
-- A versioned manager beside `src/metadata_manager/ducklake_metadata_manager_v1_1.cpp`, overriding that statement and `GetVersionString()`, instantiated for the four backends.
-- `MigrateV11`: `ADD COLUMN {IF_NOT_EXISTS} data_changes VARCHAR DEFAULT NULL` and the version update through `ExecuteMigration`.
-- The snapshot-0 insert names its columns and writes `''` at the new version.
-- A catalog gate beside `SupportsV1_1Metadata()`, which tests `>= V1_1`; `GetAllSnapshots` reads the column only behind it.
+- `src/include/common/ducklake_version.hpp`, `src/common/ducklake_version.cpp`: the new enum value, its string, `DUCKLAKE_LATEST_VERSION`, `ParseWritableDuckLakeVersion`. Moving the latest version is the native convention (`e0056364`, `e71e436b`). If the maintainers open the next version themselves, rebase on theirs.
+- `src/storage/ducklake_initializer.cpp`: a `MigrateV11(bool from_dev)` step from `V1_1`, guarded by `catalog_version < target_version`; `ResolveTargetVersion` accepts the new version; a `SetVersionedMetadataManager` branch.
+- `src/include/storage/ducklake_metadata_manager.hpp`, `src/storage/ducklake_metadata_manager.cpp`: the migration in the 1.1 shape, a `V1_2_ADDED_COLUMNS` entry with a probe like `HasV1_1Additions()` and the dev-catalog DDL skip of `MigrateV10(from_dev1)` (`:461-496`, `:618-628`); a virtual `GetSnapshotChangesTableStatement()`; the snapshot-0 insert names its columns and writes `''` at the new version.
+- A versioned manager beside `src/metadata_manager/ducklake_metadata_manager_v1_1.cpp`, overriding that statement and `GetVersionString()`, instantiated for the four backends, and added to `src/metadata_manager/CMakeLists.txt`.
+- `src/include/storage/ducklake_catalog.hpp`: a gate beside `SupportsV1_1Metadata()` (`:315-317`, which tests `>= V1_1`); `GetAllSnapshots` reads the column only behind it. Also `ducklake_metadata_info.hpp`, `ducklake_transaction_state.hpp` and `ducklake_server_side_commit.hpp` for the flag and the value.
+- Tests whose error text changes when the latest version moves: `test/sql/attach/attach_ducklake_version.test`, `attach_ducklake_version_requires_migration.test`, `test/sql/migration/v11_dev1_to_v11.test`.
 
-- [ ] **Step 1: Write the failing test** `test/sql/functions/ducklake_data_changes_migration.test`:
-  - a new catalog at the new version has the column, and snapshot 0 is `''`;
+- [ ] **Step 1: Write the failing test** `test/sql/migration/v11_data_changes.test`:
+  - a new catalog at the new version has the column last, and snapshot 0 is `''`;
   - catalogs created with `DUCKLAKE_VERSION '1.0'` and `'1.1'` have five columns and still commit;
-  - each of them after `AUTOMATIC_MIGRATION` has the column with `NULL` on old rows.
-- [ ] **Step 2: Confirm the failure.** Run `build/release/test/unittest test/sql/functions/ducklake_data_changes_migration.test`. Expected: FAIL on the missing column.
+  - each of them after `AUTOMATIC_MIGRATION` has the column with `NULL` on old rows; count columns by schema, or extra metadata schemas in a Postgres database break it.
+- [ ] **Step 2: Confirm the failure.** Expected: FAIL on the missing column.
 - [ ] **Step 3: Implement** as listed under Files.
 - [ ] **Step 4: Verify** under the default, SQLite and Postgres configs, plus `'test/sql/migration/*'`.
 - [ ] **Step 5: Commit** with the signed title `Add a data_changes column to ducklake_snapshot_changes`.
@@ -167,8 +173,9 @@ Option A applies the same Definition to the tokens:
 **Files:**
 - `src/include/storage/ducklake_transaction_changes.hpp`: two sets in `TransactionChangeInformation`, `tables_data_inserted` and `tables_data_deleted`, and the matching sets in `SnapshotChangeInformation`.
 - `src/storage/ducklake_transaction.cpp` (`AddTableChanges`): the Definition signals, leaving `deleted_data` as it is.
-- `src/storage/ducklake_transaction_state.cpp` (`WriteSnapshotChanges`): build the string, union the state's `tables_deleted_from`, and pass the new-version flag (one parameter).
-- `ducklake_metadata_manager.cpp` (`WriteSnapshotChangesSql`): name its columns.
+- `src/storage/ducklake_transaction_state.cpp` (`WriteSnapshotChanges`): build the string, union the state's `tables_deleted_from`, and pass the new-version flag.
+- `src/storage/ducklake_server_side_commit.cpp`: the same flag on the server path.
+- `ducklake_metadata_manager.cpp` (`WriteSnapshotChangesSql`, `:4707`): name its columns.
 - Positional fixtures: `test/sql/functions/ducklake_snapshots_chunked.test`, `test/sql/quack/server_side_commit_atomicity.test`, `benchmark/micro/fixtures/snap100k.benchmark.in`.
 
 - [ ] **Step 1: Write the failing tests**, one file per scenario group, pinned to the new version:
@@ -180,10 +187,10 @@ Option A applies the same Definition to the tokens:
 - [ ] **Step 2: Confirm the failure.** Expected: FAIL, because the column is `NULL`.
 - [ ] **Step 3: Implement** the signals and the write.
 - [ ] **Step 4: Verify.**
-  - Run the default, SQLite, Postgres, Quack, `no_inline.json` and `deletion_vectors.json` configs.
-  - Run `'test/sql/functions/*,test/sql/transaction/*,test/sql/data_inlining/*,test/sql/deletion_inlining/*,test/sql/compaction/*,test/sql/table_changes/*,test/sql/issues/*'`.
-  - `changes_made` output must be byte-identical to main on the same scenarios.
-  - The oracle workload on all three catalogs: `data_changes` has zero over-reports and zero under-reports against the content diff.
+  - The default, SQLite, Postgres, Quack, `no_inline.json` and `deletion_vectors.json` configs.
+  - `'test/sql/functions/*,test/sql/transaction/*,test/sql/data_inlining/*,test/sql/deletion_inlining/*,test/sql/compaction/*,test/sql/table_changes/*,test/sql/issues/*'`.
+  - `changes_made` output byte-identical to main on the same scenarios.
+  - The oracle workload on all three catalogs: zero over-reports and zero under-reports against the content diff.
 - [ ] **Step 5: Commit** with the signed title `Record the logical data changes of each snapshot`.
 
 ### Task C3 (option B, after approval): expose `data_changes` in `snapshots()`
@@ -200,6 +207,6 @@ Option A applies the same Definition to the tokens:
 
 ### Consumers
 
-- **Altertable:** backend #4413 (2026-09-28) removed the global `inlining = 0`, so catalogs now inline under DuckLake's default limit of 10, and compaction calls `ducklake_flush_inlined_data`. Flushes of inlined deletes therefore now reach Altertable's consumers as `deleted_from_table`. This was verified from the code, not measured in production.
-- **dbt adapter:** altertable-ai/dbt-altertable#45 reads a backend freshness function, so it needs neither option. Once B ships, a freshness reader would filter `snapshots()` on the column per table and use the option A table for `NULL`.
+- **Altertable:** inlining is off (`SET GLOBAL ducklake_default_data_inlining_row_limit = 0`, `settings.rs:83`) unless a catalog sets `databases.data_inlining_row_limit` (backend #4413). Only those catalogs see the flush over-report. How many opt in is not measured.
+- **dbt adapter:** the open altertable-ai/dbt-altertable#45 would read a backend freshness function, so it needs neither option. Once B ships, a freshness reader would filter `snapshots()` on the column per table and use the fallback for `NULL`.
 - **Downstream schema cache:** keeps its query. DDL must count, and over-counting only costs a refresh. Only correct its comment claiming user changes and maintenance never share a snapshot: `s07_mixed` shows `{inlined_insert=[2], flushed_inlined=[1]}`.
