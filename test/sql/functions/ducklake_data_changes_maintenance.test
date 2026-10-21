@@ -1,0 +1,175 @@
+# name: test/sql/functions/ducklake_data_changes_maintenance.test
+# description: data_changes of compaction, rewrites and flushes mixed with DML, in both orders
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/ducklake_data_changes_maintenance_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.c(a INT)
+
+statement ok
+INSERT INTO dl.c SELECT range FROM range(50)
+
+statement ok
+INSERT INTO dl.c SELECT range FROM range(50, 100)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+statement ok
+DELETE FROM dl.c WHERE a < 30
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', delete_threshold => 0.0)
+
+statement ok
+CREATE TABLE dl.fd(a INT)
+
+statement ok
+INSERT INTO dl.fd VALUES (1), (2), (3)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'fd')
+
+statement ok
+DELETE FROM dl.fd WHERE a = 2
+
+statement ok
+COMMIT
+
+statement ok
+CREATE TABLE dl.fi(a INT)
+
+statement ok
+INSERT INTO dl.fi VALUES (1), (2), (3)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.fi WHERE a = 2
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'fi')
+
+statement ok
+COMMIT
+
+statement ok
+CREATE TABLE dl.fo(a INT)
+
+statement ok
+INSERT INTO dl.fo VALUES (1), (2), (3)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'fo')
+
+statement ok
+CREATE TABLE dl.fp(a INT)
+
+statement ok
+INSERT INTO dl.fp SELECT range FROM range(50)
+
+statement ok
+DELETE FROM dl.fp WHERE a = 5
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.fp WHERE a = 6
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'fp')
+
+statement ok
+COMMIT
+
+statement ok
+DELETE FROM dl.fp WHERE a = 7
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'fp')
+
+statement ok
+DELETE FROM dl.fp WHERE a = 8
+
+statement ok
+COMMIT
+
+statement ok
+CREATE TABLE dl.a(x INT)
+
+statement ok
+CREATE TABLE dl.b(x INT)
+
+statement ok
+INSERT INTO dl.a VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'a')
+
+statement ok
+INSERT INTO dl.b VALUES (1)
+
+statement ok
+COMMIT
+
+statement ok
+DELETE FROM dl.fp WHERE a = 9
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'fp')
+
+# compaction and flushes record no data change, but a DELETE in the same transaction as a flush does,
+# in either order. A flush of pending deletes alone records nothing.
+# A flush of one table with an insert into another records only the insert
+query III
+SELECT snapshot_id, changes_made, data_changes FROM meta.ducklake_snapshot_changes ORDER BY ALL
+----
+0	created_schema:"main"	(empty)
+1	created_table:"main"."c"	(empty)
+2	inserted_into_table:1	inserted_into_table:1
+3	inserted_into_table:1	inserted_into_table:1
+4	merge_adjacent:1	(empty)
+5	deleted_from_table:1	deleted_from_table:1
+6	rewrite_delete:1	(empty)
+7	created_table:"main"."fd"	(empty)
+8	inlined_insert:2	inserted_into_table:2
+9	deleted_from_table:2,inline_flush:2	deleted_from_table:2
+10	created_table:"main"."fi"	(empty)
+11	inlined_insert:3	inserted_into_table:3
+12	inlined_delete:3,inline_flush:3	deleted_from_table:3
+13	created_table:"main"."fo"	(empty)
+14	inlined_insert:4	inserted_into_table:4
+15	inline_flush:4	(empty)
+16	created_table:"main"."fp"	(empty)
+17	inserted_into_table:5	inserted_into_table:5
+18	inlined_delete:5	deleted_from_table:5
+19	deleted_from_table:5,inlined_delete:5	deleted_from_table:5
+20	inlined_delete:5	deleted_from_table:5
+21	deleted_from_table:5,inlined_delete:5	deleted_from_table:5
+22	created_table:"main"."a"	(empty)
+23	created_table:"main"."b"	(empty)
+24	inlined_insert:6	inserted_into_table:6
+25	inlined_insert:7,inline_flush:6	inserted_into_table:7
+26	inlined_delete:5	deleted_from_table:5
+27	deleted_from_table:5	(empty)

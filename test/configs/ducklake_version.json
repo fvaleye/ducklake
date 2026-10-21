@@ -24,10 +24,19 @@
         "test/sql/metadata/sqlite_large_commit.test",
         "test/sql/migration/v10_row_group_count.test",
         "test/sql/migration/v11_stats_exactness.test",
+        "test/sql/migration/v11_data_changes.test",
         "test/sql/partitioning/epoch_version_gate.test",
         "test/sql/stats/stats_exactness_inlined.test",
         "test/sql/types/null_type_version_gate.test",
         "test/sql/macros/null_default_version_gate.test"
+      ]
+    },
+    {
+      "reason": "data_changes was added in 1.2-dev1 and is not recorded when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/functions/ducklake_data_changes_dml.test",
+        "test/sql/functions/ducklake_data_changes_maintenance.test",
+        "test/sql/functions/ducklake_data_changes_concurrency.test"
       ]
     },
     {

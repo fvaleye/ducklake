@@ -387,9 +387,10 @@ void AddCreatedChangeInfo(vector<string> &changes_made,
 
 string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commit_state,
                                                       TransactionChangeInformation &changes,
-                                                      const DuckLakeSnapshotCommit &commit_info) const {
+                                                      const DuckLakeCommitContext &context) const {
 	// re-add all inserted tables - transaction-local table identifiers should have been converted at this stage
 	changes.tables_deleted_from = tables_deleted_from;
+	changes.tables_data_deleted = tables_deleted_from;
 	for (auto &entry : local_changes.Changes()) {
 		DuckLakeTransaction::AddTableChanges(commit_state.GetTableId(entry.first), entry.second, changes);
 	}
@@ -426,7 +427,15 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	AddChangeInfo(commit_state, changes_made, changes.tables_rewrite_delete, "rewrite_delete");
 	SnapshotChangeInfo change_info;
 	change_info.changes_made = StringUtil::Join(changes_made, ",");
-	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
+	if (context.supports_v1_2_metadata) {
+		auto tables_data_inserted = changes.tables_inserted_into;
+		tables_data_inserted.insert(changes.tables_inserted_inlined.begin(), changes.tables_inserted_inlined.end());
+		vector<string> data_changes;
+		AddChangeInfo(commit_state, data_changes, tables_data_inserted, "inserted_into_table");
+		AddChangeInfo(commit_state, data_changes, changes.tables_data_deleted, "deleted_from_table");
+		change_info.data_changes = Value(StringUtil::Join(data_changes, ","));
+	}
+	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, context.commit_info);
 }
 
 //! Replaces a field queued by this transaction, which keeps the children queued for it
@@ -2698,7 +2707,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// write the new snapshot
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
-			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
+			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();

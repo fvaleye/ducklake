@@ -76,8 +76,9 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	result->snapshots = metadata_manager.GetAllSnapshots(filter);
+	unordered_map<string, Value> data_changes_values;
 	for (auto &snapshot : result->snapshots) {
-		result->rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot));
+		result->rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot, data_changes_values));
 	}
 	return std::move(result);
 }

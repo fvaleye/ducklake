@@ -45,6 +45,8 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_compacted;
 	set<TableIndex> tables_merge_adjacent;
 	set<TableIndex> tables_rewrite_delete;
+	//! Tables whose rows were deleted, excluding the delete files of a flush
+	set<TableIndex> tables_data_deleted;
 };
 
 struct SnapshotChangeInformation {

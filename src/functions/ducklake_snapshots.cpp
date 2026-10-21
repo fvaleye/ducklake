@@ -75,6 +75,9 @@ void DuckLakeSnapshotsFunction::GetSnapshotTypes(vector<LogicalType> &return_typ
 
 	names.emplace_back("commit_extra_info");
 	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("data_changes");
+	return_types.emplace_back(LogicalType::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)));
 }
 
 template <class T>
@@ -87,7 +90,18 @@ static void PushIDChangeList(vector<Value> &change_keys, vector<Value> &change_v
 	change_values.push_back(IDListToValue(id_list));
 }
 
-vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapshotInfo &snapshot) {
+static Value DataChangesToValue(const string &data_changes) {
+	auto logical_changes = SnapshotChangeInformation::ParseChangesMade(data_changes);
+	vector<Value> data_keys;
+	vector<Value> data_values;
+	PushIDChangeList(data_keys, data_values, logical_changes.inserted_tables, "tables_inserted_into");
+	PushIDChangeList(data_keys, data_values, logical_changes.tables_deleted_from, "tables_deleted_from");
+	return Value::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR), std::move(data_keys),
+	                  std::move(data_values));
+}
+
+vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapshotInfo &snapshot,
+                                                           unordered_map<string, Value> &data_changes_values) {
 	vector<Value> row_values;
 	row_values.push_back(Value::BIGINT(NumericCast<int64_t>(snapshot.id)));
 	row_values.push_back(Value::TIMESTAMPTZ(snapshot.time));
@@ -146,6 +160,20 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 	row_values.push_back(snapshot.author);
 	row_values.push_back(snapshot.commit_message);
 	row_values.push_back(snapshot.commit_extra_info);
+
+	if (snapshot.change_info.data_changes.IsNull()) {
+		static const auto DATA_CHANGES_TYPE =
+		    LogicalType::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR));
+		row_values.emplace_back(DATA_CHANGES_TYPE);
+		return row_values;
+	}
+	// snapshots repeat the same data_changes, and building its map is most of the cost of the column
+	auto &data_changes = StringValue::Get(snapshot.change_info.data_changes);
+	auto entry = data_changes_values.find(data_changes);
+	if (entry == data_changes_values.end()) {
+		entry = data_changes_values.emplace(data_changes, DataChangesToValue(data_changes)).first;
+	}
+	row_values.push_back(entry->second);
 	return row_values;
 }
 
@@ -170,8 +198,10 @@ static void DuckLakeSnapshotsExecute(ClientContext &context, TableFunctionInput 
 	auto &data = data_p.bind_data->Cast<DuckLakeSnapshotsBindData>();
 	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
 	vector<vector<Value>> rows;
+	unordered_map<string, Value> data_changes_values;
 	while (state.offset < data.snapshots.size() && rows.size() < STANDARD_VECTOR_SIZE) {
-		rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(data.snapshots[state.offset++]));
+		rows.push_back(
+		    DuckLakeSnapshotsFunction::GetSnapshotValues(data.snapshots[state.offset++], data_changes_values));
 	}
 	idx_t chunk_offset = 0;
 	DuckLakeBaseMetadataFunction::ScanRows(rows, chunk_offset, output);

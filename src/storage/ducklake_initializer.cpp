@@ -17,6 +17,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_version.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
+#include "metadata_manager/ducklake_metadata_manager_v1_2.hpp"
 #include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
@@ -284,6 +285,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV10(catalog_version == DuckLakeVersion::V1_1_DEV_1);
 				catalog_version = DuckLakeVersion::V1_1;
 			}
+			if (catalog_version == DuckLakeVersion::V1_1 && catalog_version < target_version) {
+				metadata_manager.MigrateV11();
+				catalog_version = DuckLakeVersion::V1_2_DEV_1;
+			}
 			if (catalog_version != target_version) {
 				// LCOV_EXCL_START
 				throw NotImplementedException("Unsupported DuckLake version '%s'",
@@ -339,14 +344,30 @@ DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalo
 		// If automatic_migration is on, use to latest
 		return DUCKLAKE_LATEST_VERSION;
 	}
-	if (catalog_version == DuckLakeVersion::V1_0 || catalog_version == DuckLakeVersion::V1_1) {
+	if (catalog_version == DuckLakeVersion::V1_0 || catalog_version == DuckLakeVersion::V1_1 ||
+	    catalog_version == DuckLakeVersion::V1_2_DEV_1) {
 		// otherwise, use the catalog's current version
 		return catalog_version;
 	}
-	// pre-1.0 and dev catalogs always require migration
+	// pre-1.0 and other dev catalogs always require migration
 	throw InvalidInputException("DuckLake catalog version mismatch: catalog version is %s, but the extension requires "
 	                            "version %s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 	                            catalog_version_str, DuckLakeVersionToString(DUCKLAKE_LATEST_VERSION));
+}
+
+template <template <typename> class VersionedManager>
+static unique_ptr<DuckLakeMetadataManager> MakeVersionedMetadataManager(DuckLakeMetadataManager &current,
+                                                                        DuckLakeTransaction &transaction) {
+	if (dynamic_cast<QuackMetadataManager *>(&current)) {
+		return make_uniq<VersionedManager<QuackMetadataManager>>(transaction);
+	}
+	if (dynamic_cast<PostgresMetadataManager *>(&current)) {
+		return make_uniq<VersionedManager<PostgresMetadataManager>>(transaction);
+	}
+	if (dynamic_cast<SQLiteMetadataManager *>(&current)) {
+		return make_uniq<VersionedManager<SQLiteMetadataManager>>(transaction);
+	}
+	return make_uniq<VersionedManager<DuckLakeMetadataManager>>(transaction);
 }
 
 void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version) {
@@ -358,15 +379,9 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	auto &current = transaction.GetMetadataManager();
 	unique_ptr<DuckLakeMetadataManager> new_manager;
 	if (version == DuckLakeVersion::V1_1) {
-		if (dynamic_cast<QuackMetadataManager *>(&current)) {
-			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<QuackMetadataManager>>(transaction);
-		} else if (dynamic_cast<PostgresMetadataManager *>(&current)) {
-			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<PostgresMetadataManager>>(transaction);
-		} else if (dynamic_cast<SQLiteMetadataManager *>(&current)) {
-			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<SQLiteMetadataManager>>(transaction);
-		} else {
-			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<DuckLakeMetadataManager>>(transaction);
-		}
+		new_manager = MakeVersionedMetadataManager<DuckLakeMetadataManagerV1_1>(current, transaction);
+	} else if (version == DuckLakeVersion::V1_2_DEV_1) {
+		new_manager = MakeVersionedMetadataManager<DuckLakeMetadataManagerV1_2>(current, transaction);
 	} else {
 		throw InternalException("SetVersionedMetadataManager: unsupported version");
 	}

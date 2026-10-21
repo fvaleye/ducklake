@@ -1,0 +1,119 @@
+# name: test/sql/quack/server_side_commit_data_changes.test
+# description: data_changes of server-side (Quack) commits
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/server_side_commit_data_changes', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM __ducklake_metadata_lake.ducklake_metadata WHERE key = 'version'
+----
+1.2-dev1
+
+statement ok
+CREATE TABLE lake.t(a INT)
+
+statement ok
+CREATE TABLE lake.u(a INT)
+
+# the staged commit of the session is the last server-side commit
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_commit_message('lake', 'p', 'ins_file')
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(100)
+
+statement ok
+COMMIT
+
+query I
+CALL quack_query_by_name('__ducklake_metadata_lake', 'SELECT commit_message FROM ducklake_staged_commit')
+----
+ins_file
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_commit_message('lake', 'p', 'del_delete_file')
+
+statement ok
+DELETE FROM lake.t WHERE a BETWEEN 50 AND 80
+
+statement ok
+COMMIT
+
+query I
+CALL quack_query_by_name('__ducklake_metadata_lake', 'SELECT commit_message FROM ducklake_staged_commit')
+----
+del_delete_file
+
+statement ok
+INSERT INTO lake.u SELECT range FROM range(20)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_commit_message('lake', 'p', 'drop_whole_file')
+
+statement ok
+DELETE FROM lake.u
+
+statement ok
+COMMIT
+
+query I
+CALL quack_query_by_name('__ducklake_metadata_lake', 'SELECT commit_message FROM ducklake_staged_commit')
+----
+drop_whole_file
+
+# a server-side commit retried on top of a concurrent one
+statement ok
+INSERT INTO lake.u SELECT range FROM range(40)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_set_commit_message('lake', 'p', 'concurrent_insert_t')
+
+statement ok con1
+INSERT INTO lake.t SELECT range FROM range(200, 260)
+
+statement ok con2
+CALL ducklake_set_commit_message('lake', 'p', 'concurrent_delete_u')
+
+statement ok con2
+DELETE FROM lake.u WHERE a BETWEEN 10 AND 30
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT commit_message, data_changes FROM __ducklake_metadata_lake.ducklake_snapshot_changes WHERE commit_message IS NOT NULL ORDER BY snapshot_id
+----
+ins_file	inserted_into_table:1
+del_delete_file	deleted_from_table:1
+drop_whole_file	deleted_from_table:2
+concurrent_insert_t	inserted_into_table:1
+concurrent_delete_u	deleted_from_table:2
