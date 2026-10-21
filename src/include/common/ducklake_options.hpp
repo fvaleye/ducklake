@@ -33,6 +33,8 @@ struct DuckLakeOptions {
 	DuckLakeEncryption encryption = DuckLakeEncryption::AUTOMATIC;
 	bool create_if_not_exists = true;
 	bool automatic_migration = false;
+	//! Adds ducklake_snapshot_data_changes to an existing catalog
+	bool record_data_changes = false;
 	bool hide_metadata_catalog = true;
 	unique_ptr<BoundAtClause> at_clause;
 	case_insensitive_map_t<Value> metadata_parameters;

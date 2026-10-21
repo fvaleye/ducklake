@@ -97,6 +97,7 @@ void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig 
 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	supports_v1_1_metadata = ReadSupportsV1_1Metadata();
+	records_data_changes = MetadataTableExists("ducklake_snapshot_data_changes");
 	ReadCommitHeader();
 	ReadColumnTypes();
 	ReadStagedDeleteFiles();
@@ -634,6 +635,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
+	ctx.records_data_changes = records_data_changes;
 	ctx.snapshot_and_stats_query = DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata);
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
@@ -726,10 +728,13 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	return ctx;
 }
 
-bool DuckLakeServerSideCommit::InlinedFileDeletionTableExists(TableIndex table_id) {
+bool DuckLakeServerSideCommit::MetadataTableExists(const string &table_name) {
 	auto database_name = DatabaseManager::GetDefaultDatabase(*fresh_conn.context);
-	auto table_name = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 	return fresh_conn.TableInfo(database_name, Identifier(metadata_schema_name), Identifier(table_name)) != nullptr;
+}
+
+bool DuckLakeServerSideCommit::InlinedFileDeletionTableExists(TableIndex table_id) {
+	return MetadataTableExists(DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
 }
 
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {

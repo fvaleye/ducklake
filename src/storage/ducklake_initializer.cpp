@@ -111,6 +111,9 @@ void DuckLakeInitializer::Initialize() {
 	auto &current_metadata_manager = transaction.GetMetadataManager();
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
+	// the option creates the table, which the probe may not see yet when another attach created it concurrently
+	catalog.SetRecordsDataChanges(options.record_data_changes ||
+	                              current_metadata_manager.MetadataTableExists("ducklake_snapshot_data_changes"));
 	current_metadata_manager.ClearCache();
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
@@ -224,6 +227,7 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	SetVersionedMetadataManager(transaction, version);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
+	AddSnapshotDataChangesTable(transaction, true);
 	if (catalog.Encryption() == DuckLakeEncryption::AUTOMATIC) {
 		// default to unencrypted
 		catalog.SetEncryption(DuckLakeEncryption::UNENCRYPTED);
@@ -326,6 +330,30 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
+	}
+	if (options.record_data_changes) {
+		if (options.access_mode == AccessMode::READ_ONLY) {
+			throw InvalidInputException("RECORD_DATA_CHANGES requires write access to the DuckLake metadata");
+		}
+		AddSnapshotDataChangesTable(transaction, false);
+	}
+}
+
+void DuckLakeInitializer::AddSnapshotDataChangesTable(DuckLakeTransaction &transaction, bool new_catalog) {
+	auto &metadata_manager = transaction.GetMetadataManager();
+	if (!new_catalog && metadata_manager.MetadataTableExists("ducklake_snapshot_data_changes")) {
+		return;
+	}
+	try {
+		metadata_manager.CreateSnapshotDataChangesTable(new_catalog);
+	} catch (std::exception &ex) {
+		// an IOException is retried by the attach, which sees the table when another attach created it
+		auto schema = SQLIdentifier::ToString(catalog.MetadataSchemaName().GetIdentifierName());
+		auto create_table = StringUtil::Replace(DuckLakeMetadataManager::GetSnapshotDataChangesTableStatement(),
+		                                        "{METADATA_CATALOG}", schema);
+		throw IOException("%s\nAn administrator can create the table and grant access to it, then attach without "
+		                  "RECORD_DATA_CHANGES:\n%s",
+		                  ErrorData(ex).RawMessage(), create_table);
 	}
 }
 

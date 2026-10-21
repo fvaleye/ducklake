@@ -249,6 +249,21 @@ INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_sn
 	result->ThrowIfError("Failed to initialize DuckLake: ");
 }
 
+string DuckLakeMetadataManager::GetSnapshotDataChangesTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_data_changes(snapshot_id BIGINT PRIMARY KEY, "
+	       "data_changes VARCHAR);";
+}
+
+void DuckLakeMetadataManager::CreateSnapshotDataChangesTable(bool initial_snapshot) {
+	auto create_statement =
+	    StringUtil::Replace(GetSnapshotDataChangesTableStatement(), "CREATE TABLE", "CREATE TABLE IF NOT EXISTS");
+	if (initial_snapshot) {
+		create_statement += "\nINSERT INTO {METADATA_CATALOG}.ducklake_snapshot_data_changes (snapshot_id, "
+		                    "data_changes) VALUES (0, '');";
+	}
+	Execute(create_statement)->ThrowIfError("Failed to create ducklake_snapshot_data_changes: ");
+}
+
 string DuckLakeMetadataManager::GetSchemaTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema(schema_id BIGINT PRIMARY KEY, schema_uuid UUID, "
 	       "begin_snapshot BIGINT, end_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN);";
@@ -3845,7 +3860,7 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 	return result;
 }
 
-bool DuckLakeMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+bool DuckLakeMetadataManager::MetadataTableExists(const string &table_name) {
 	auto &catalog = transaction.GetCatalog();
 	return transaction.GetConnection().TableInfo(Identifier(catalog.MetadataDatabaseName()),
 	                                             catalog.MetadataSchemaName(), Identifier(table_name)) != nullptr;
@@ -3872,7 +3887,7 @@ string DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id,
 		return string(); // known to not exist
 	}
 	// A committed table may not be visible in this transaction's catalog snapshot.
-	if (InlinedDeletionTableExists(table_name)) {
+	if (MetadataTableExists(table_name)) {
 		delete_inlined_table_cache.insert(table_id.index);
 		catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
 		return table_name;
@@ -4714,6 +4729,14 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
 }
 
+string DuckLakeMetadataManager::WriteSnapshotDataChangesSql(const string &data_changes) {
+	// '' (recorded, no data change) stays distinct from a missing row (not recorded)
+	return StringUtil::Format(
+	    "INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_data_changes (snapshot_id, data_changes) VALUES "
+	    "({SNAPSHOT_ID}, %s);",
+	    SQLString::ToString(data_changes));
+}
+
 string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exactness) {
 	// both UNION arms must stay column-aligned - extend them together
 	string snapshot_arm_padding;
@@ -5181,14 +5204,19 @@ UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
-	auto res = Query(StringUtil::Format(R"(
-SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message, commit_extra_info
+	bool has_data_changes = transaction.GetCatalog().RecordsDataChanges();
+	auto res = Query(StringUtil::Format(
+	    R"(
+SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message, commit_extra_info, %s
 FROM {METADATA_CATALOG}.ducklake_snapshot
 LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot_changes USING (snapshot_id)
+%s
 %s %s
 ORDER BY snapshot_id ASC
 )",
-	                                    filter.empty() ? "" : "WHERE", filter));
+	    has_data_changes ? "data_changes" : "NULL AS data_changes",
+	    has_data_changes ? "LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot_data_changes USING (snapshot_id)" : "",
+	    filter.empty() ? "" : "WHERE", filter));
 	res->ThrowIfError("Failed to get snapshot information from DuckLake: ");
 	auto context = transaction.context.lock();
 	vector<DuckLakeSnapshotInfo> snapshots;
@@ -5203,6 +5231,10 @@ ORDER BY snapshot_id ASC
 		snapshot_info.author = row.GetBaseValue(5);
 		snapshot_info.commit_message = row.GetBaseValue(6);
 		snapshot_info.commit_extra_info = row.GetBaseValue(7);
+		if (!row.IsNull(8)) {
+			snapshot_info.change_info.has_data_changes = true;
+			snapshot_info.change_info.data_changes = row.GetValue<string>(8);
+		}
 		snapshots.push_back(std::move(snapshot_info));
 	}
 	return snapshots;

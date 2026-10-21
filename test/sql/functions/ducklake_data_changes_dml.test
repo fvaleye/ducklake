@@ -1,0 +1,111 @@
+# name: test/sql/functions/ducklake_data_changes_dml.test
+# description: Logical data changes of DML are recorded in ducklake_snapshot_data_changes
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# Logical data changes of plain DML: inserts and deletes, inlined and written to Parquet, per table
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_dml', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(a INT)
+
+statement ok
+CREATE TABLE dl.u(a INT)
+
+# a DDL-only commit records an empty entry, so it differs from a snapshot that was never recorded
+
+query IT
+SELECT snapshot_id, data_changes FROM dl.snapshots() ORDER BY snapshot_id
+----
+0	{}
+1	{}
+2	{}
+
+# 100 rows are written to a Parquet file, 2 rows are inlined
+
+statement ok
+INSERT INTO dl.t SELECT i FROM range(100) r(i)
+
+statement ok
+INSERT INTO dl.u VALUES (1), (2)
+
+# deleting Parquet rows and deleting inlined rows are both logical deletes
+
+statement ok
+DELETE FROM dl.t WHERE a < 50
+
+statement ok
+DELETE FROM dl.u WHERE a = 1
+
+# an UPDATE inserts and deletes, even when it does not change the value
+
+statement ok
+UPDATE dl.t SET a = a WHERE a = 60
+
+statement ok
+UPDATE dl.u SET a = 5 WHERE a = 2
+
+# statements that change no rows do not commit
+
+statement ok
+INSERT INTO dl.t SELECT 1 WHERE false
+
+statement ok
+DELETE FROM dl.t WHERE a < 0
+
+statement ok
+TRUNCATE dl.u
+
+# CTAS records the table id the table was assigned
+
+statement ok
+CREATE TABLE dl.v AS SELECT 1 AS a
+
+# dropping a table is not a data change
+
+statement ok
+DROP TABLE dl.v
+
+# deleting every row of a Parquet file drops the whole file
+
+statement ok
+CREATE TABLE dl.w AS SELECT i AS a FROM range(100) r(i)
+
+statement ok
+DELETE FROM dl.w
+
+query ITT
+SELECT snapshot_id, changes, data_changes FROM dl.snapshots() WHERE snapshot_id >= 3 ORDER BY snapshot_id
+----
+3	{tables_inserted_into=[1]}	{tables_inserted_into=[1]}
+4	{inlined_insert=[2]}	{tables_inserted_into=[2]}
+5	{tables_deleted_from=[1]}	{tables_deleted_from=[1]}
+6	{inlined_delete=[2]}	{tables_deleted_from=[2]}
+7	{inlined_insert=[1], inlined_delete=[1]}	{tables_inserted_into=[1], tables_deleted_from=[1]}
+8	{inlined_insert=[2], inlined_delete=[2]}	{tables_inserted_into=[2], tables_deleted_from=[2]}
+9	{inlined_delete=[2]}	{tables_deleted_from=[2]}
+10	{tables_created=[main.v], inlined_insert=[3]}	{tables_inserted_into=[3]}
+11	{tables_dropped=[3]}	{}
+12	{tables_created=[main.w], tables_inserted_into=[4]}	{tables_inserted_into=[4]}
+13	{tables_deleted_from=[4]}	{tables_deleted_from=[4]}
+
+# the side table holds one row per snapshot, and '' stays distinct from a missing row
+
+query III
+SELECT count(*), count(DISTINCT snapshot_id), count(*) FILTER (WHERE data_changes = '') FROM meta.ducklake_snapshot_data_changes
+----
+14	14	4
+
+query I
+SELECT count(*) FROM dl.snapshots() WHERE data_changes IS NULL
+----
+0

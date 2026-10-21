@@ -1,0 +1,113 @@
+# name: test/sql/functions/ducklake_data_changes_opt_in.test
+# description: A catalog without ducklake_snapshot_data_changes records nothing until RECORD_DATA_CHANGES adds it
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# A catalog without the side table records nothing until it is attached with RECORD_DATA_CHANGES
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_opt_in', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(a INT)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# the catalog as a 1.1 binary leaves it
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_data_changes
+
+statement ok
+DETACH dl
+
+# a plain attach creates nothing and records nothing
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_opt_in', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query IT
+SELECT snapshot_id, data_changes IS NULL FROM dl.snapshots() ORDER BY snapshot_id
+----
+0	true
+1	true
+2	true
+3	true
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_data_changes'
+----
+0
+
+statement ok
+DETACH dl
+
+# the option needs write access
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_opt_in', METADATA_CATALOG 'meta', READ_ONLY, RECORD_DATA_CHANGES)
+----
+RECORD_DATA_CHANGES requires write access to the DuckLake metadata
+
+# the option adds the table once, and the old snapshots stay unknown
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_opt_in', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10, RECORD_DATA_CHANGES)
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_data_changes'
+----
+1
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+query IT
+SELECT snapshot_id, data_changes FROM dl.snapshots() ORDER BY snapshot_id
+----
+0	NULL
+1	NULL
+2	NULL
+3	NULL
+4	{tables_inserted_into=[1]}
+
+statement ok
+DETACH dl
+
+# the table stays and is used without the option
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_opt_in', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+DELETE FROM dl.t WHERE a = 3
+
+query IT
+SELECT snapshot_id, data_changes FROM dl.snapshots() WHERE snapshot_id > 3 ORDER BY snapshot_id
+----
+4	{tables_inserted_into=[1]}
+5	{tables_deleted_from=[1]}
+
+statement ok
+DETACH dl
+
+# the option on a catalog that has the table changes nothing
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_opt_in', METADATA_CATALOG 'meta', RECORD_DATA_CHANGES)
+
+query I
+SELECT count(*) FROM meta.ducklake_snapshot_data_changes
+----
+2

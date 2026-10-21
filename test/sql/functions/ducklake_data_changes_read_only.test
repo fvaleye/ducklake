@@ -1,0 +1,53 @@
+# name: test/sql/functions/ducklake_data_changes_read_only.test
+# description: A read-only attach of a catalog without ducklake_snapshot_data_changes creates nothing
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# A read-only attach of a catalog without the side table reads every snapshot as unknown and creates nothing
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_read_only', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(a INT)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# the catalog as a binary that does not know the table leaves it
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_data_changes
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_read_only', METADATA_CATALOG 'meta', READ_ONLY)
+
+query IT
+SELECT snapshot_id, data_changes IS NULL FROM dl.snapshots() ORDER BY snapshot_id
+----
+0	true
+1	true
+2	true
+
+query I
+SELECT count(*) FROM dl.t
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_data_changes'
+----
+0
+
+statement ok
+DETACH dl

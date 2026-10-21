@@ -1,0 +1,122 @@
+# name: test/sql/functions/ducklake_data_changes_mixed.test
+# description: A commit that flushes and changes data records only the logical change
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# A commit that flushes and also changes data records only the logical change, per table
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_mixed', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.a(x INT)
+
+statement ok
+CREATE TABLE dl.b(x INT)
+
+statement ok
+INSERT INTO dl.a SELECT i FROM range(100) r(i)
+
+statement ok
+INSERT INTO dl.b SELECT i FROM range(100) r(i)
+
+# an inlined delete is pending on a
+
+statement ok
+DELETE FROM dl.a WHERE x = 1
+
+# flush plus a delete of Parquet rows of the same table
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.a WHERE x BETWEEN 10 AND 30
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+COMMIT
+
+# a pending inlined delete again, then the flush first and the delete second
+
+statement ok
+DELETE FROM dl.a WHERE x = 2
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DELETE FROM dl.a WHERE x BETWEEN 40 AND 50
+
+statement ok
+COMMIT
+
+# flush plus an insert: the insert is logical, the flush is not
+
+statement ok
+DELETE FROM dl.a WHERE x = 3
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+INSERT INTO dl.a SELECT i FROM range(1000, 1100) r(i)
+
+statement ok
+COMMIT
+
+# a flush of a, DML on b
+
+statement ok
+DELETE FROM dl.a WHERE x = 4
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DELETE FROM dl.b WHERE x < 20
+
+statement ok
+COMMIT
+
+query ITT
+SELECT snapshot_id, changes, data_changes FROM dl.snapshots() WHERE snapshot_id >= 5 ORDER BY snapshot_id
+----
+5	{inlined_delete=[1]}	{tables_deleted_from=[1]}
+6	{tables_deleted_from=[1]}	{tables_deleted_from=[1]}
+7	{inlined_delete=[1]}	{tables_deleted_from=[1]}
+8	{tables_deleted_from=[1]}	{tables_deleted_from=[1]}
+9	{inlined_delete=[1]}	{tables_deleted_from=[1]}
+10	{tables_inserted_into=[1], tables_deleted_from=[1]}	{tables_inserted_into=[1]}
+11	{inlined_delete=[1]}	{tables_deleted_from=[1]}
+12	{tables_deleted_from=[1, 2]}	{tables_deleted_from=[2]}
+
+# every entry maps to a token of the same snapshot for the same table
+
+query I
+SELECT count(*) FROM dl.snapshots() WHERE data_changes IS NOT NULL AND (NOT list_has_all(list_concat(coalesce(changes['tables_inserted_into'], []), coalesce(changes['inlined_insert'], [])), coalesce(data_changes['tables_inserted_into'], [])) OR NOT list_has_all(list_concat(coalesce(changes['tables_deleted_from'], []), coalesce(changes['inlined_delete'], [])), coalesce(data_changes['tables_deleted_from'], [])))
+----
+0
+
+query I
+SELECT count(*) FROM dl.snapshots() WHERE data_changes IS NOT NULL AND data_changes <> map {}
+----
+10

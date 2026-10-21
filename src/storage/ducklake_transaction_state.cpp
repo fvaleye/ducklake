@@ -387,7 +387,8 @@ void AddCreatedChangeInfo(vector<string> &changes_made,
 
 string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commit_state,
                                                       TransactionChangeInformation &changes,
-                                                      const DuckLakeSnapshotCommit &commit_info) const {
+                                                      const DuckLakeSnapshotCommit &commit_info,
+                                                      bool records_data_changes) const {
 	// re-add all inserted tables - transaction-local table identifiers should have been converted at this stage
 	changes.tables_deleted_from = tables_deleted_from;
 	for (auto &entry : local_changes.Changes()) {
@@ -426,7 +427,16 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	AddChangeInfo(commit_state, changes_made, changes.tables_rewrite_delete, "rewrite_delete");
 	SnapshotChangeInfo change_info;
 	change_info.changes_made = StringUtil::Join(changes_made, ",");
-	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
+	auto sql = DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
+	if (!records_data_changes) {
+		return sql;
+	}
+	// whole-file drops are logical deletes too
+	changes.tables_data_deleted.insert(tables_deleted_from.begin(), tables_deleted_from.end());
+	vector<string> data_changes;
+	AddChangeInfo(commit_state, data_changes, changes.tables_data_inserted, "inserted_into_table");
+	AddChangeInfo(commit_state, data_changes, changes.tables_data_deleted, "deleted_from_table");
+	return sql + "\n" + DuckLakeMetadataManager::WriteSnapshotDataChangesSql(StringUtil::Join(data_changes, ","));
 }
 
 //! Replaces a field queued by this transaction, which keeps the children queued for it
@@ -2698,7 +2708,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// write the new snapshot
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
-			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
+			batch_queries +=
+			    WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info, context.records_data_changes);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();

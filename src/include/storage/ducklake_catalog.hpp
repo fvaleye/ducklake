@@ -310,6 +310,13 @@ public:
 	void SetDuckLakeVersion(DuckLakeVersion version) {
 		ducklake_version = version;
 	}
+	//! Whether the catalog has ducklake_snapshot_data_changes, as probed at attach
+	bool RecordsDataChanges() const {
+		return records_data_changes;
+	}
+	void SetRecordsDataChanges(bool records) {
+		records_data_changes = records;
+	}
 	bool SupportsNestedSchemas() const override {
 		return SupportsV1_1Metadata();
 	}
@@ -441,6 +448,7 @@ private:
 	string metadata_type;
 	//! The resolved DuckLake spec version of the attached catalog
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
+	bool records_data_changes = false;
 	//! A per-instance identifier used to scope ObjectCache keys.
 	string instance_id;
 	//! Whether or not the catalog is initialized

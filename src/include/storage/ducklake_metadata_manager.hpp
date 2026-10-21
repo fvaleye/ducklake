@@ -287,6 +287,9 @@ public:
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
+	static string GetSnapshotDataChangesTableStatement();
+	//! Creates the side table, with its row for snapshot 0 in a new catalog
+	void CreateSnapshotDataChangesTable(bool initial_snapshot);
 	virtual string GetSchemaTableStatement();
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
@@ -460,8 +463,8 @@ public:
 	//! Get the name of the inlined deletion table for a given table ID
 	virtual string GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                           bool include_local_changes = true);
-	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
-	virtual bool InlinedDeletionTableExists(const string &table_name);
+	//! Probe for a metadata table by exact name without aborting the active metadata transaction.
+	virtual bool MetadataTableExists(const string &table_name);
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
 	                                     const set<TableIndex> &replaced_tables);
@@ -516,6 +519,7 @@ public:
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
 	//! server-side commit path.
 	static string InsertSnapshotSql();
+	static string WriteSnapshotDataChangesSql(const string &data_changes);
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);

@@ -304,7 +304,7 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	return false;
 }
 
-bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+bool PostgresMetadataManager::MetadataTableExists(const string &table_name) {
 	auto &catalog = transaction.GetCatalog();
 	auto remote_query = StringUtil::Format(
 	    "SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
@@ -313,7 +313,7 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_nam
 	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
 	                       SQLString::ToString(remote_query));
 	auto result = DuckLakeMetadataManager::Query(query);
-	result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
+	result->ThrowIfError("Failed to probe for DuckLake metadata table: ");
 	return result->Fetch() != nullptr;
 }
 

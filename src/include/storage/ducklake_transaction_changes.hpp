@@ -45,6 +45,9 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_compacted;
 	set<TableIndex> tables_merge_adjacent;
 	set<TableIndex> tables_rewrite_delete;
+	//! Logical data changes, recorded in ducklake_snapshot_data_changes
+	set<TableIndex> tables_data_inserted;
+	set<TableIndex> tables_data_deleted;
 };
 
 struct SnapshotChangeInformation {

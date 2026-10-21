@@ -1,0 +1,80 @@
+# name: test/sql/functions/ducklake_data_changes_expiry.test
+# description: Expiring snapshots keeps the rows of ducklake_snapshot_data_changes and ids are not reused
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# Expiring snapshots keeps their side rows, like ducklake_snapshot_changes, and snapshot ids are not reused
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_expiry', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(a INT)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [2])
+
+query I
+SELECT snapshot_id FROM meta.ducklake_snapshot_data_changes ORDER BY snapshot_id
+----
+0
+1
+2
+3
+4
+
+query I
+SELECT snapshot_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0
+1
+2
+3
+4
+
+# the kept rows are invisible
+
+query IT
+SELECT snapshot_id, data_changes FROM dl.snapshots() ORDER BY snapshot_id
+----
+0	{}
+1	{}
+3	{tables_inserted_into=[1]}
+4	{tables_inserted_into=[1]}
+
+# a row for a snapshot that does not exist is ignored too
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_data_changes (snapshot_id, data_changes) VALUES (9999, 'inserted_into_table:1')
+
+query I
+SELECT count(*) FROM dl.snapshots()
+----
+4
+
+# ids come from the latest snapshot, so a new commit does not meet a kept row
+
+statement ok
+INSERT INTO dl.t VALUES (4)
+
+query IT
+SELECT snapshot_id, data_changes FROM dl.snapshots() WHERE snapshot_id > 3 ORDER BY snapshot_id
+----
+4	{tables_inserted_into=[1]}
+5	{tables_inserted_into=[1]}

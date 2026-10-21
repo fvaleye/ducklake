@@ -1088,6 +1088,7 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 	bool inserted_data = false;
 	bool flushed_inline_data = false;
 	bool deleted_data = !table_changes.new_delete_files.empty();
+	bool deleted_logically = !table_changes.new_inlined_data_deletes.empty() || table_changes.new_inlined_file_deletes;
 	for (auto &file : table_changes.new_data_files) {
 		if (!file.begin_snapshot.IsValid()) {
 			inserted_data = true;
@@ -1097,6 +1098,7 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 		for (auto &delete_file : file.delete_files) {
 			// deleting flushed rows deletes committed rows
 			deleted_data |= delete_file.source == DeleteFileSource::REGULAR;
+			deleted_logically |= delete_file.source == DeleteFileSource::REGULAR;
 		}
 	}
 
@@ -1111,6 +1113,18 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 	}
 	if (deleted_data) {
 		changes.tables_deleted_from.insert(table_id);
+	}
+	bool inserted_inlined_rows = table_changes.new_inlined_data && table_changes.new_inlined_data->Count() > 0;
+	if (inserted_data || inserted_inlined_rows) {
+		changes.tables_data_inserted.insert(table_id);
+	}
+	for (auto &delete_files : table_changes.new_delete_files) {
+		for (auto &delete_file : delete_files.second) {
+			deleted_logically |= delete_file.source == DeleteFileSource::REGULAR;
+		}
+	}
+	if (deleted_logically) {
+		changes.tables_data_deleted.insert(table_id);
 	}
 	if (!table_changes.new_inlined_data_deletes.empty() || table_changes.new_inlined_file_deletes) {
 		changes.tables_deleted_inlined.insert(table_id);
@@ -1504,8 +1518,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return result;
 	};
 	context.inlined_file_deletion_table_exists = [&](TableIndex table_id) {
-		return metadata_manager->InlinedDeletionTableExists(
-		    DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
+		return metadata_manager->MetadataTableExists(DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
 	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
@@ -1672,6 +1685,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
+	context.records_data_changes = ducklake_catalog.RecordsDataChanges();
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);

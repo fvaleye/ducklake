@@ -42,7 +42,7 @@ public:
 	void ClearCache() override;
 
 	bool MetadataExists() override;
-	bool InlinedDeletionTableExists(const string &table_name) override;
+	bool MetadataTableExists(const string &table_name) override;
 
 protected:
 	string MetadataExistsQuery() const override;

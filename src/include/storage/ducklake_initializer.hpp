@@ -34,6 +34,7 @@ private:
 	void InitializeDataPath();
 	string GetAttachOptions();
 	void SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version);
+	void AddSnapshotDataChangesTable(DuckLakeTransaction &transaction, bool new_catalog);
 	DuckLakeVersion ResolveTargetVersion(DuckLakeVersion catalog_version, const string &catalog_version_str);
 
 private:

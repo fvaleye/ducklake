@@ -75,6 +75,9 @@ void DuckLakeSnapshotsFunction::GetSnapshotTypes(vector<LogicalType> &return_typ
 
 	names.emplace_back("commit_extra_info");
 	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("data_changes");
+	return_types.emplace_back(LogicalType::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)));
 }
 
 template <class T>
@@ -146,6 +149,19 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 	row_values.push_back(snapshot.author);
 	row_values.push_back(snapshot.commit_message);
 	row_values.push_back(snapshot.commit_extra_info);
+
+	// NULL when the snapshot has no row in ducklake_snapshot_data_changes
+	Value data_changes(LogicalType::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)));
+	if (snapshot.change_info.has_data_changes) {
+		auto logical_changes = SnapshotChangeInformation::ParseChangesMade(snapshot.change_info.data_changes);
+		vector<Value> data_keys;
+		vector<Value> data_values;
+		PushIDChangeList(data_keys, data_values, logical_changes.inserted_tables, "tables_inserted_into");
+		PushIDChangeList(data_keys, data_values, logical_changes.tables_deleted_from, "tables_deleted_from");
+		data_changes = Value::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR), std::move(data_keys),
+		                          std::move(data_values));
+	}
+	row_values.push_back(std::move(data_changes));
 	return row_values;
 }
 
