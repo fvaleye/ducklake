@@ -4,7 +4,7 @@ A plan to let readers tell, per snapshot and per table, logical inserts and dele
 
 | File | Contents |
 | --- | --- |
-| [`plan.md`](plan.md) | Implementation plan, v12 (2026-10-21): option B chosen and its POC verified on `bbd42124`, B2 (separate table) verified as the fallback, upstream route through the DuckDB Labs channel and a short Discussion |
+| [`plan.md`](plan.md) | Implementation plan, v12 (2026-10-21): option B chosen and its POC verified on `ea543c71`, B2 (separate table) verified as the fallback, upstream route through the DuckDB Labs channel and a short Discussion |
 | [`challenge-v7.md`](challenge-v7.md) | Adversarial review of plan v7, with the option B POC and the Track 0 fix POCs |
 | [`challenge-v6.md`](challenge-v6.md) | Adversarial review of plan v6 against main after the 1.1 release, with executed probes |
 | [`marker-prototype.md`](marker-prototype.md) | Prototype of the marker on `900cf2f9`, with the signals it records and the plan changes it forced |
