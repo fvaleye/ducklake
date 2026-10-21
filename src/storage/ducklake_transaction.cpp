@@ -1100,6 +1100,8 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 	bool inserted_data = false;
 	bool flushed_inline_data = false;
 	bool deleted_data = !table_changes.new_delete_files.empty();
+	bool deleted_inlined = !table_changes.new_inlined_data_deletes.empty() || table_changes.new_inlined_file_deletes;
+	bool deleted_logically = deleted_inlined;
 	for (auto &file : table_changes.new_data_files) {
 		if (!file.begin_snapshot.IsValid()) {
 			inserted_data = true;
@@ -1109,6 +1111,7 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 		for (auto &delete_file : file.delete_files) {
 			// deleting flushed rows deletes committed rows
 			deleted_data |= delete_file.source == DeleteFileSource::REGULAR;
+			deleted_logically |= delete_file.source == DeleteFileSource::REGULAR;
 		}
 	}
 
@@ -1124,7 +1127,15 @@ void DuckLakeTransaction::AddTableChanges(TableIndex table_id, const LocalTableD
 	if (deleted_data) {
 		changes.tables_deleted_from.insert(table_id);
 	}
-	if (!table_changes.new_inlined_data_deletes.empty() || table_changes.new_inlined_file_deletes) {
+	for (auto &delete_files : table_changes.new_delete_files) {
+		for (auto &delete_file : delete_files.second) {
+			deleted_logically |= delete_file.source == DeleteFileSource::REGULAR;
+		}
+	}
+	if (deleted_logically) {
+		changes.tables_data_deleted.insert(table_id);
+	}
+	if (deleted_inlined) {
 		changes.tables_deleted_inlined.insert(table_id);
 	}
 	for (auto &compaction : table_changes.compactions) {
@@ -1690,6 +1701,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
+	context.supports_v1_2_metadata = ducklake_catalog.SupportsV1_2Metadata();
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
 }
 

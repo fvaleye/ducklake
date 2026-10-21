@@ -1,0 +1,45 @@
+# name: test/sql/functions/ducklake_data_changes_concurrency.test
+# description: concurrent CTAS commits record the final table id of the retried one
+# group: [functions]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/data_changes_concurrency_files', METADATA_CATALOG 'meta')
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CREATE TABLE dl.a AS SELECT range AS x FROM range(100)
+
+statement ok con2
+CREATE TABLE dl.b AS SELECT range AS x FROM range(100)
+
+statement ok con1
+COMMIT
+
+# retried on top of the snapshot of con1, where the transaction-local id of b is remapped
+statement ok con2
+COMMIT
+
+query II
+SELECT table_id, table_name FROM meta.ducklake_table ORDER BY ALL
+----
+1	a
+2	b
+
+query II
+SELECT snapshot_id, data_changes FROM dl.snapshots() WHERE snapshot_id > 0 ORDER BY ALL
+----
+1	{tables_inserted_into=[1]}
+2	{tables_inserted_into=[2]}

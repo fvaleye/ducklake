@@ -1,0 +1,59 @@
+# name: test/sql/migration/v11_data_changes.test
+# description: a v1.1 catalog has no data_changes column, and migrating to 1.2-dev1 adds it with NULL on the old rows
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_data_changes_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM meta.ducklake_snapshot_changes)
+----
+5
+
+query I
+SELECT count(*) FROM dl.snapshots() WHERE data_changes IS NULL
+----
+3
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_data_changes_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM meta.ducklake_snapshot_changes)
+----
+6
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_snapshot_changes) OFFSET 5
+----
+data_changes
+
+query I
+SELECT count(*) FROM dl.snapshots() WHERE data_changes IS NULL
+----
+3
+
+statement ok
+INSERT INTO dl.t VALUES (44)
+
+query I
+SELECT data_changes FROM dl.snapshots() WHERE snapshot_id = 3
+----
+{tables_inserted_into=[1]}

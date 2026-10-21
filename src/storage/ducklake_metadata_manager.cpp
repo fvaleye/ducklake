@@ -237,16 +237,26 @@ void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckL
 	string data_path = StorePath(base_data_path);
 	string encryption_str = DuckLakeUtil::BoolLiteral(encryption == DuckLakeEncryption::ENCRYPTED);
 	string initial_schema_uuid = transaction.GenerateUUID();
-	initialize_query += StringUtil::Format(R"(
+	bool supports_v1_2_metadata = ducklake_catalog.SupportsV1_2Metadata();
+	string snapshot_zero_columns = supports_v1_2_metadata ? ", data_changes" : "";
+	string snapshot_zero_values = supports_v1_2_metadata ? ", ''" : "";
+	initialize_query +=
+	    StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
-INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
+INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes (snapshot_id, changes_made%s)
+VALUES (0, 'created_schema:"main"'%s);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '%s'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_snapshot, end_snapshot, schema_name, path, path_is_relative) VALUES (0, '%s'::UUID, 0, NULL, 'main', 'main/', true);
 	)",
-	                                       GetVersionString(), DuckDB::SourceID(), SQLString(data_path), encryption_str,
-	                                       initial_schema_uuid);
+	                       snapshot_zero_columns, snapshot_zero_values, GetVersionString(), DuckDB::SourceID(),
+	                       SQLString(data_path), encryption_str, initial_schema_uuid);
 	auto result = Execute(initialize_query);
 	result->ThrowIfError("Failed to initialize DuckLake: ");
+}
+
+string DuckLakeMetadataManager::GetSnapshotChangesTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, "
+	       "changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);";
 }
 
 string DuckLakeMetadataManager::GetSchemaTableStatement() {
@@ -286,8 +296,7 @@ string DuckLakeMetadataManager::GetCreateTableStatements() {
 	statements.push_back(
 	    "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, "
 	    "schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);");
-	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, "
-	                     "changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);");
+	statements.push_back(GetSnapshotChangesTableStatement());
 	statements.push_back(GetSchemaTableStatement());
 	statements.push_back(
 	    "CREATE TABLE {METADATA_CATALOG}.ducklake_table(table_id BIGINT, table_uuid UUID, begin_snapshot BIGINT, "
@@ -472,6 +481,9 @@ static constexpr const DuckLakeAddedColumn V1_1_ADDED_COLUMNS[] = {
     {"ducklake_table_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
     {"ducklake_schema", "parent_schema_id", "BIGINT"}};
 
+static constexpr const DuckLakeAddedColumn V1_2_ADDED_COLUMNS[] = {
+    {"ducklake_snapshot_changes", "data_changes", "VARCHAR DEFAULT NULL"}};
+
 static string V1_1MigrationQuery(bool has_additions) {
 	string query;
 	if (!has_additions) {
@@ -630,6 +642,16 @@ void DuckLakeMetadataManager::MigrateV10(bool from_dev1) {
 	// DDL locks the metadata tables exclusively on Postgres, skip it when a dev catalog has every addition
 	auto has_additions = from_dev1 && HasV1_1Additions();
 	ExecuteMigration(V1_1MigrationQuery(has_additions), from_dev1, from_dev1 ? "1.1-dev1" : "1.0", "1.1");
+}
+
+void DuckLakeMetadataManager::MigrateV11() {
+	string query;
+	for (auto &added : V1_2_ADDED_COLUMNS) {
+		query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN %s %s;\n", added.table, added.column,
+		                            added.type);
+	}
+	query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.2-dev1' WHERE key = 'version';\n";
+	ExecuteMigration(query, false, "1.1", "1.2-dev1");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
@@ -4721,11 +4743,17 @@ static string SQLStringOrNull(const string &str) {
 
 string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
                                                         const DuckLakeSnapshotCommit &commit_info) {
+	string data_changes_column = change_info.data_changes.IsNull() ? "" : ", data_changes";
+	string data_changes_value =
+	    change_info.data_changes.IsNull() ? "" : ", " + DuckLakeUtil::TextLiteralOrNull(change_info.data_changes);
 	return StringUtil::Format(
-	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES ({SNAPSHOT_ID}, %s, %s, %s, %s);)",
-	    SQLStringOrNull(change_info.changes_made), DuckLakeUtil::TextLiteralOrNull(commit_info.author),
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes
+(snapshot_id, changes_made, author, commit_message, commit_extra_info%s)
+VALUES ({SNAPSHOT_ID}, %s, %s, %s, %s%s);)",
+	    data_changes_column, SQLStringOrNull(change_info.changes_made),
+	    DuckLakeUtil::TextLiteralOrNull(commit_info.author),
 	    DuckLakeUtil::TextLiteralOrNull(commit_info.commit_message),
-	    DuckLakeUtil::TextLiteralOrNull(commit_info.commit_extra_info));
+	    DuckLakeUtil::TextLiteralOrNull(commit_info.commit_extra_info), data_changes_value);
 }
 
 string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exactness) {
@@ -5222,14 +5250,17 @@ UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
+	bool supports_v1_2_metadata = transaction.GetCatalog().SupportsV1_2Metadata();
 	auto res = Query(StringUtil::Format(R"(
-SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message, commit_extra_info
+SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message,
+	commit_extra_info%s
 FROM {METADATA_CATALOG}.ducklake_snapshot
 LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot_changes USING (snapshot_id)
 %s %s
 ORDER BY snapshot_id ASC
 )",
-	                                    filter.empty() ? "" : "WHERE", filter));
+	                                    supports_v1_2_metadata ? ", data_changes" : "", filter.empty() ? "" : "WHERE",
+	                                    filter));
 	res->ThrowIfError("Failed to get snapshot information from DuckLake: ");
 	auto context = transaction.context.lock();
 	vector<DuckLakeSnapshotInfo> snapshots;
@@ -5244,6 +5275,9 @@ ORDER BY snapshot_id ASC
 		snapshot_info.author = row.GetBaseValue(5);
 		snapshot_info.commit_message = row.GetBaseValue(6);
 		snapshot_info.commit_extra_info = row.GetBaseValue(7);
+		if (supports_v1_2_metadata) {
+			snapshot_info.change_info.data_changes = row.GetBaseValue(8);
+		}
 		snapshots.push_back(std::move(snapshot_info));
 	}
 	return snapshots;

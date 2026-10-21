@@ -22,10 +22,11 @@ enum class DuckLakeVersion : uint8_t {
 	V0_4 = 6,
 	V1_0 = 7,
 	V1_1_DEV_1 = 8,
-	V1_1 = 9
+	V1_1 = 9,
+	V1_2_DEV_1 = 10
 };
 
-static constexpr DuckLakeVersion DUCKLAKE_LATEST_VERSION = DuckLakeVersion::V1_1;
+static constexpr DuckLakeVersion DUCKLAKE_LATEST_VERSION = DuckLakeVersion::V1_2_DEV_1;
 
 DuckLakeVersion DuckLakeVersionFromString(const string &version_str);
 DuckLakeVersion ParseWritableDuckLakeVersion(const string &version_str, const string &option_name);

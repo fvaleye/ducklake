@@ -71,7 +71,9 @@ public:
 	DuckLakeSnapshotsFunction();
 
 	static void GetSnapshotTypes(vector<LogicalType> &return_types, vector<Identifier> &names);
-	static vector<Value> GetSnapshotValues(const DuckLakeSnapshotInfo &snapshot);
+	//! data_changes_values holds the data_changes maps built so far, which later rows with the same text reuse
+	static vector<Value> GetSnapshotValues(const DuckLakeSnapshotInfo &snapshot,
+	                                       unordered_map<string, Value> &data_changes_values);
 };
 
 class DuckLakeTableInfoFunction : public DuckLakeBaseMetadataFunction {

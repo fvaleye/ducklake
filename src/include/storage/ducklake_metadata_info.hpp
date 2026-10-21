@@ -301,6 +301,8 @@ struct DuckLakeGlobalStatsInfo {
 
 struct SnapshotChangeInfo {
 	string changes_made;
+	//! The logical data changes, NULL when not recorded
+	Value data_changes;
 };
 
 struct SnapshotDeletedFromFiles {

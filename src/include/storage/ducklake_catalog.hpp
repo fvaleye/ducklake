@@ -322,6 +322,11 @@ public:
 		return ducklake_version >= DuckLakeVersion::V1_1;
 	}
 
+	//! Whether the catalog has the v1.2 metadata features
+	bool SupportsV1_2Metadata() const {
+		return ducklake_version >= DuckLakeVersion::V1_2_DEV_1;
+	}
+
 	void OnDetach(ClientContext &context) override;
 
 	optional_idx GetCatalogVersion(ClientContext &context) override;
