@@ -204,9 +204,9 @@ static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, Ta
 
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto result = make_uniq<DuckLakeSnapshotsBindData>();
-	auto snapshots = metadata_manager.GetSnapshotsQuery(
+	auto snapshots = metadata_manager.QuerySnapshots(
 	    StringUtil::Format("snapshot_id <= %llu", transaction.GetNewestVisibleSnapshotId()));
-	// shortcut: retains the full columnar result, use a dedicated streaming query to bound history memory.
+	// shortcut: the full result is materialized; revisit if snapshot history exceeds available memory.
 	result->snapshots = snapshots->TakeCollection();
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
 	return std::move(result);
