@@ -102,13 +102,8 @@ static void PushNameChangeList(vector<Value> &change_keys, vector<Value> &change
 	change_values.push_back(Value::LIST(LogicalType::VARCHAR, std::move(list_values)));
 }
 
-vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapshotInfo &snapshot) {
-	vector<Value> row_values;
-	row_values.push_back(Value::BIGINT(NumericCast<int64_t>(snapshot.id)));
-	row_values.push_back(Value::TIMESTAMPTZ(snapshot.time));
-	row_values.push_back(Value::BIGINT(NumericCast<int64_t>(snapshot.schema_version)));
-
-	auto other_changes = SnapshotChangeInformation::ParseChangesMade(snapshot.change_info.changes_made);
+static Value GetSnapshotChanges(const string &changes_made) {
+	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made);
 	vector<Value> change_keys;
 	vector<Value> change_values;
 	if (!other_changes.created_schemas.empty()) {
@@ -166,8 +161,16 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 		change_values.push_back(Value::LIST(LogicalType::VARCHAR, std::move(expired)));
 	}
 
-	row_values.push_back(Value::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR),
-	                                std::move(change_keys), std::move(change_values)));
+	return Value::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR), std::move(change_keys),
+	                  std::move(change_values));
+}
+
+vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapshotInfo &snapshot) {
+	vector<Value> row_values;
+	row_values.push_back(Value::BIGINT(NumericCast<int64_t>(snapshot.id)));
+	row_values.push_back(Value::TIMESTAMPTZ(snapshot.time));
+	row_values.push_back(Value::BIGINT(NumericCast<int64_t>(snapshot.schema_version)));
+	row_values.push_back(GetSnapshotChanges(snapshot.change_info.changes_made));
 	row_values.push_back(snapshot.author);
 	row_values.push_back(snapshot.commit_message);
 	row_values.push_back(snapshot.commit_extra_info);
@@ -175,8 +178,24 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 }
 
 struct DuckLakeSnapshotsBindData : public TableFunctionData {
-	vector<DuckLakeSnapshotInfo> snapshots;
+	unique_ptr<ColumnDataCollection> snapshots;
 };
+
+struct DuckLakeSnapshotsState : public GlobalTableFunctionState {
+	ColumnDataScanState scan;
+	DataChunk chunk;
+	vector<ColumnIndex> column_ids;
+};
+
+static unique_ptr<GlobalTableFunctionState> DuckLakeSnapshotsInit(ClientContext &context,
+                                                                  TableFunctionInitInput &input) {
+	auto result = make_uniq<DuckLakeSnapshotsState>();
+	result->column_ids = input.column_indexes;
+	auto &data = input.bind_data->Cast<DuckLakeSnapshotsBindData>();
+	data.snapshots->InitializeScan(result->scan);
+	data.snapshots->InitializeScanChunk(result->chunk);
+	return std::move(result);
+}
 
 static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
@@ -185,26 +204,61 @@ static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, Ta
 
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto result = make_uniq<DuckLakeSnapshotsBindData>();
-	result->snapshots = metadata_manager.GetAllSnapshots(
+	auto snapshots = metadata_manager.GetSnapshotsQuery(
 	    StringUtil::Format("snapshot_id <= %llu", transaction.GetNewestVisibleSnapshotId()));
+	// shortcut: retains the full columnar result, use a dedicated streaming query to bound history memory.
+	result->snapshots = snapshots->TakeCollection();
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
 	return std::move(result);
 }
 
 static void DuckLakeSnapshotsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->Cast<DuckLakeSnapshotsBindData>();
-	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
-	vector<vector<Value>> rows;
-	while (state.offset < data.snapshots.size() && rows.size() < STANDARD_VECTOR_SIZE) {
-		rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(data.snapshots[state.offset++]));
+	auto &state = data_p.global_state->Cast<DuckLakeSnapshotsState>();
+	data.snapshots->Scan(state.scan, state.chunk);
+	auto count = state.chunk.size();
+	for (idx_t row = 0; row < count; row++) {
+		for (idx_t column = 0; column < state.column_ids.size(); column++) {
+			auto &output_column = output.data[column];
+			switch (state.column_ids[column].GetPrimaryIndex()) {
+			case 0:
+				output_column.Append(
+				    Value::BIGINT(NumericCast<int64_t>(state.chunk.GetValue(0, row).GetValue<idx_t>())));
+				break;
+			case 1:
+				output_column.Append(state.chunk.GetValue(1, row).CastAs(context, LogicalType::TIMESTAMP_TZ));
+				break;
+			case 2:
+				output_column.Append(
+				    Value::BIGINT(NumericCast<int64_t>(state.chunk.GetValue(2, row).GetValue<idx_t>())));
+				break;
+			case 3: {
+				auto changes = state.chunk.GetValue(4, row);
+				output_column.Append(GetSnapshotChanges(changes.IsNull() ? string() : changes.GetValue<string>()));
+				break;
+			}
+			case 4:
+				output_column.Append(state.chunk.GetValue(5, row));
+				break;
+			case 5:
+				output_column.Append(state.chunk.GetValue(6, row));
+				break;
+			case 6:
+				output_column.Append(state.chunk.GetValue(7, row));
+				break;
+			default:
+				throw InternalException("Unsupported column index for ducklake_snapshots");
+			}
+		}
 	}
-	idx_t chunk_offset = 0;
-	DuckLakeBaseMetadataFunction::ScanRows(rows, chunk_offset, output);
+	output.SetChildCardinality(count);
 }
 
 DuckLakeSnapshotsFunction::DuckLakeSnapshotsFunction()
     : DuckLakeBaseMetadataFunction("ducklake_snapshots", DuckLakeSnapshotsBind) {
 	function = DuckLakeSnapshotsExecute;
+	init_global = DuckLakeSnapshotsInit;
+	projection_pushdown = true;
 }
 
 } // namespace duckdb

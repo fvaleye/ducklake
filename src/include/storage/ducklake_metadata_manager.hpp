@@ -593,6 +593,7 @@ public:
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
+	virtual unique_ptr<QueryResult> GetSnapshotsQuery(const string &filter);
 	//! The live snapshot tags, with the times of their snapshots if requested
 	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true);
 	//! The snapshot of the live snapshot tag with the name, if any

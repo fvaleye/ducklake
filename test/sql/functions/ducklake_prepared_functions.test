@@ -49,6 +49,11 @@ EXECUTE snapshots
 4
 
 query I
+EXECUTE snapshots
+----
+4
+
+query I
 EXECUTE current_snapshot
 ----
 3

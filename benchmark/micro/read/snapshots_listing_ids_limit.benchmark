@@ -1,0 +1,19 @@
+# name: benchmark/micro/read/snapshots_listing_ids_limit.benchmark
+# description: Read 10 snapshot IDs from a history of 100001 snapshots
+# group: [read]
+
+name Snapshots Listing IDs Limit
+group micro
+subgroup read
+
+require ducklake
+
+include benchmark/micro/fixtures/snap100k.benchmark.in
+
+run
+SELECT sum(snapshot_id) FROM (SELECT snapshot_id FROM ducklake_snapshots('lake') LIMIT 10);
+
+result_query I
+SELECT * FROM __answer
+----
+45

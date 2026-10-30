@@ -49,3 +49,22 @@ WHERE snapshot_id > 0 AND (
 )
 ----
 0
+
+query II
+SELECT (SELECT sum(snapshot_id) FROM ducklake_snapshots('dl')),
+       (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'))
+----
+8394753	4097
+
+query II
+SELECT commit_message, snapshot_id FROM ducklake_snapshots('dl') WHERE snapshot_id = 4097
+----
+message 4097	4097
+
+statement ok
+UPDATE meta.ducklake_snapshot_changes SET changes_made = 'unknown:1' WHERE snapshot_id = 4097
+
+statement error
+SELECT changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 4097
+----
+Unsupported change type

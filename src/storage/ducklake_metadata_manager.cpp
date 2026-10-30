@@ -5385,7 +5385,7 @@ UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 	return batch_query;
 }
 
-vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::GetSnapshotsQuery(const string &filter) {
 	auto res = Query(StringUtil::Format(R"(
 SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message, commit_extra_info
 FROM {METADATA_CATALOG}.ducklake_snapshot
@@ -5395,6 +5395,11 @@ ORDER BY snapshot_id ASC
 )",
 	                                    filter.empty() ? "" : "WHERE", filter));
 	res->ThrowIfError("Failed to get snapshot information from DuckLake: ");
+	return res;
+}
+
+vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
+	auto res = GetSnapshotsQuery(filter);
 	auto context = transaction.context.lock();
 	vector<DuckLakeSnapshotInfo> snapshots;
 
