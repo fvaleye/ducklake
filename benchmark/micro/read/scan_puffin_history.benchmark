@@ -1,0 +1,30 @@
+# name: benchmark/micro/read/scan_puffin_history.benchmark
+# description: Run selective reads of a data file with two cumulative Puffin deletion snapshots
+# group: [read]
+
+name Scan Puffin History
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/puffin_history.benchmark.in
+
+run
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+SELECT sum(id) FROM lake.t WHERE id >= 1999000;
+
+result_query I
+SELECT * FROM __answer
+----
+1997499501

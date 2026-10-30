@@ -1,0 +1,23 @@
+# name: benchmark/micro/fixtures/puffin_history.benchmark.in
+# description: Read-only lake with one data file and two cumulative Puffin deletion snapshots
+# group: [fixtures]
+
+cache_file puffin_history_ready.marker
+
+load
+@create puffin_history
+@attach puffin_history AS lake (DATA_PATH '${BENCHMARK_DIR}/dv', DATA_INLINING_ROW_LIMIT 0, WRITE_DELETION_VECTORS true)
+CREATE TABLE lake.t AS SELECT i AS id FROM range(2000000) t(i);
+DELETE FROM lake.t WHERE id < 1000000;
+DELETE FROM lake.t WHERE id = 1999999;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 't')) <> 1
+OR (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file
+    WHERE end_snapshot IS NULL AND format = 'puffin' AND delete_count = 1000001 AND footer_size > 0) <> 1
+THEN error('t must have one data file with two cumulative Puffin deletion snapshots') END;
+DETACH lake;
+@seal puffin_history
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/puffin_history_ready.marker' (FORMAT CSV);
+@attach puffin_history AS lake (READ_ONLY)
+
+reload
+@attach puffin_history AS lake (READ_ONLY)

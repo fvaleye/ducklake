@@ -1,0 +1,84 @@
+# name: test/sql/delete/deletion_vector_out_of_order_positions.test
+# description: Cumulative Puffin blobs retain the first deletion snapshot when positions arrive out of order
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+(DATA_PATH '{DATA_PATH}/dv_out_of_order', WRITE_DELETION_VECTORS true, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t AS SELECT i AS id FROM range(1000) t(i)
+
+statement ok
+SET VARIABLE before_delete = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+DELETE FROM lake.t WHERE id = 900
+
+statement ok
+SET VARIABLE first_delete = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+DELETE FROM lake.t WHERE id = 10
+
+statement ok
+SET VARIABLE second_delete = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+DELETE FROM lake.t WHERE id = 700
+
+statement ok
+SET VARIABLE third_delete = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+query III
+SELECT format = 'puffin', delete_count, partial_max = getvariable('third_delete')
+FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+true	3	true
+
+query I
+SELECT sum(id) FROM lake.t AT (VERSION => getvariable('first_delete'))
+----
+498600
+
+query I
+SELECT sum(id) FROM lake.t AT (VERSION => getvariable('second_delete'))
+----
+498590
+
+query I
+SELECT sum(id) FROM lake.t
+----
+497890
+
+query II
+SELECT id, snapshot_id = CASE id WHEN 10 THEN getvariable('second_delete')
+    WHEN 700 THEN getvariable('third_delete') ELSE getvariable('first_delete') END
+FROM ducklake_table_deletions('lake', 'main', 't', getvariable('before_delete'), getvariable('third_delete'))
+ORDER BY id
+----
+10	true
+700	true
+900	true
+
+query I
+SELECT id FROM ducklake_table_deletions('lake', 'main', 't', getvariable('second_delete'), getvariable('third_delete'))
+ORDER BY id
+----
+10
+700
+
+query I
+SELECT id FROM ducklake_table_deletions('lake', 'main', 't', getvariable('before_delete'), getvariable('second_delete'))
+ORDER BY id
+----
+10
+900
