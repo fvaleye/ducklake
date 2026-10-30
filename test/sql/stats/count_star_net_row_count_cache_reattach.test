@@ -1,5 +1,5 @@
 # name: test/sql/stats/count_star_net_row_count_cache_reattach.test
-# description: Reattaching a lake reads the exact count after a committed delete
+# description: Exact counts stay separate across lakes and refresh after reattach
 # group: [stats]
 
 require ducklake
@@ -7,6 +7,8 @@ require ducklake
 require parquet
 
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/count_star_net_row_count_cache_reattach.db
+
+test-env OTHER_CONNECTION {TEST_DIR}/{UUID}_other.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -20,6 +22,25 @@ query I
 SELECT count(*) FROM lake.t
 ----
 500
+
+statement ok
+ATTACH 'ducklake:{OTHER_CONNECTION}' AS other (DATA_PATH '{DATA_PATH}/count_star_net_row_count_cache_other', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE other.t AS SELECT i FROM range(30) t(i)
+
+query I
+SELECT count(*) FROM other.t
+----
+30
+
+query I
+SELECT count(*) FROM lake.t
+----
+500
+
+statement ok
+DETACH other
 
 statement ok
 DETACH lake
