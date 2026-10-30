@@ -112,7 +112,7 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext 
 		return a.snapshot_id.GetIndex() < b.snapshot_id.GetIndex();
 	});
 
-	vector<pair<idx_t, idx_t>> position_to_snapshot;
+	vector<pair<idx_t, idx_t>> positions_with_snapshots;
 	roaring::Roaring64Map seen_positions;
 	for (auto &blob : sorted_blobs) {
 		auto snapshot_id = blob.snapshot_id.GetIndex();
@@ -123,13 +123,13 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext 
 		auto new_positions = deletion_vector->bitmap - seen_positions;
 		seen_positions |= new_positions;
 		for (auto position : new_positions) {
-			position_to_snapshot.emplace_back(position, snapshot_id);
+			positions_with_snapshots.emplace_back(position, snapshot_id);
 		}
 	}
-	std::sort(position_to_snapshot.begin(), position_to_snapshot.end());
+	std::sort(positions_with_snapshots.begin(), positions_with_snapshots.end());
 
 	result.has_embedded_snapshots = true;
-	for (auto &entry : position_to_snapshot) {
+	for (auto &entry : positions_with_snapshots) {
 		if (snapshot_filter_min.IsValid() && entry.second < snapshot_filter_min.GetIndex()) {
 			continue;
 		}
