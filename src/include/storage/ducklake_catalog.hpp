@@ -68,6 +68,22 @@ struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	optional_idx GetEstimatedCacheMemory() const override;
 };
 
+//! Net counts are snapshot-keyed because inlined deletes need not advance next_file_id.
+struct DuckLakeNetRowCountCacheEntry : public ObjectCacheEntry {
+	explicit DuckLakeNetRowCountCacheEntry(idx_t row_count_p) : row_count(row_count_p) {
+	}
+	idx_t row_count;
+	static string ObjectType() {
+		return "ducklake_net_row_count";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override {
+		return sizeof(DuckLakeNetRowCountCacheEntry);
+	}
+};
+
 //! Cached record counts for a snapshot
 struct DuckLakeTableRecordCountCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_TABLE = 64;
@@ -257,6 +273,7 @@ public:
 	                                             optional_ptr<const vector<TableIndex>> load_tables = nullptr);
 	//! Returns zero when the table has no stats
 	idx_t GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id);
+	optional_idx GetNetRowCount(DuckLakeTransaction &transaction, DuckLakeTableEntry &table);
 
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        SchemaIndex schema_id);

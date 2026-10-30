@@ -1,0 +1,42 @@
+# name: test/sql/stats/count_star_net_row_count_cache_reattach.test
+# description: Reattaching a lake reads the exact count after a committed delete
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/count_star_net_row_count_cache_reattach.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/count_star_net_row_count_cache_reattach', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t AS SELECT i FROM range(500) t(i)
+
+query I
+SELECT count(*) FROM lake.t
+----
+500
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/count_star_net_row_count_cache_reattach')
+
+statement ok
+DELETE FROM lake.t WHERE i < 50
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/count_star_net_row_count_cache_reattach')
+
+query I
+SELECT count(*) FROM lake.t
+----
+450

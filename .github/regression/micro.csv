@@ -77,6 +77,9 @@ benchmark/micro/read/load_nested_catalog.benchmark
 benchmark/micro/write/create_tables_quoted_columns.benchmark
 benchmark/micro/read/snapshots_listing_limit.benchmark
 benchmark/micro/read/snapshots_listing_changes.benchmark
+benchmark/micro/read/repeated_count_star.benchmark
+benchmark/micro/read/repeated_count_star_many_files.benchmark
+benchmark/micro/read/repeated_count_star_native.benchmark
 benchmark/micro/read/catalog_load_schema_history.benchmark
 benchmark/micro/maintenance/migrate_v10_inlined_tables.benchmark
 benchmark/micro/write/add_column_many_files.benchmark

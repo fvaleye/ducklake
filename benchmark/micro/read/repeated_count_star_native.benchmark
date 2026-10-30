@@ -1,0 +1,20 @@
+# name: benchmark/micro/read/repeated_count_star_native.benchmark
+# description: Run repeated autocommit counts on a warm native DuckDB table
+# group: [read]
+
+name Repeated Count Star Native
+group micro
+subgroup read
+
+load
+CREATE TABLE t AS SELECT i FROM range(10000) t(i);
+
+run
+@for i in range(20)
+SELECT count(*) FROM t;
+@end
+
+result_query I
+SELECT * FROM __answer
+----
+10000

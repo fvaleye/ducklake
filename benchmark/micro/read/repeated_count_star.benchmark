@@ -1,0 +1,37 @@
+# name: benchmark/micro/read/repeated_count_star.benchmark
+# description: Run repeated autocommit counts on a warm DuckLake table with one data file
+# group: [read]
+
+name Repeated Count Star
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+cache_file repeated_count_star_ready.marker
+
+load
+@create repeated_count_star
+@attach repeated_count_star AS lake (DATA_PATH '${BENCHMARK_DIR}/repeated_count_star_data')
+CREATE TABLE lake.t AS SELECT i FROM range(10000) t(i);
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 't')) <> 1
+THEN error('t must consist of one file') END;
+DETACH lake;
+@seal repeated_count_star
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/repeated_count_star_ready.marker' (FORMAT CSV);
+@attach repeated_count_star AS lake (READ_ONLY)
+
+reload
+@attach repeated_count_star AS lake (READ_ONLY)
+
+run
+@for i in range(20)
+SELECT count(*) FROM lake.t;
+@end
+
+result_query I
+SELECT * FROM __answer
+----
+10000

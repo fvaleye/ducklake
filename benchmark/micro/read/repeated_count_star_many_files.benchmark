@@ -1,0 +1,23 @@
+# name: benchmark/micro/read/repeated_count_star_many_files.benchmark
+# description: Run repeated autocommit counts on a warm DuckLake table with ~4096 files
+# group: [read]
+
+name Repeated Count Star Many Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/many_files.benchmark.in
+
+run
+@for i in range(20)
+SELECT count(*) FROM lake.events;
+@end
+
+result_query I
+SELECT * FROM __answer
+----
+8388608
