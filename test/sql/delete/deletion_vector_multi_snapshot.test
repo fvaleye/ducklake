@@ -108,3 +108,25 @@ query I
 SELECT COUNT(*) FROM glob('{DATA_PATH}/dv_multi_snapshot/main/test/*-delete.puffin')
 ----
 1
+
+# deletes out of row order: 8, then 2, then 5, so later blobs add positions below earlier ones
+statement ok
+CREATE TABLE unordered AS SELECT i id FROM range(10) t(i);
+
+statement ok
+DELETE FROM unordered WHERE id = 8
+
+statement ok
+DELETE FROM unordered WHERE id = 2
+
+statement ok
+SET VARIABLE v_unordered_d2 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
+
+statement ok
+DELETE FROM unordered WHERE id = 5
+
+# time travel to the second delete: 8 and 2 are deleted, 5 is not yet
+query I
+SELECT list(id ORDER BY id) FROM unordered AT (VERSION => getvariable('v_unordered_d2'))
+----
+[0, 1, 3, 4, 5, 6, 7, 9]

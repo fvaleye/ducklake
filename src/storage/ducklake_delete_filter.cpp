@@ -5,7 +5,6 @@
 #include "storage/ducklake_puffin.hpp"
 #include "common/parquet_file_scanner.hpp"
 #include "duckdb/common/algorithm.hpp"
-#include "duckdb/common/map.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -113,20 +112,24 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeletionVectorFile(ClientContext 
 		return a.snapshot_id.GetIndex() < b.snapshot_id.GetIndex();
 	});
 
-	map<idx_t, idx_t> position_to_snapshot;
+	vector<pair<idx_t, idx_t>> positions_with_snapshots;
+	roaring::Roaring64Map seen_positions;
 	for (auto &blob : sorted_blobs) {
 		auto snapshot_id = blob.snapshot_id.GetIndex();
 		if (snapshot_filter_max.IsValid() && snapshot_id > snapshot_filter_max.GetIndex()) {
 			break;
 		}
 		auto deletion_vector = reader.DecodeBlob(blob);
-		for (auto position : deletion_vector->bitmap) {
-			position_to_snapshot.emplace(position, snapshot_id);
+		auto new_positions = deletion_vector->bitmap - seen_positions;
+		seen_positions |= new_positions;
+		for (auto position : new_positions) {
+			positions_with_snapshots.emplace_back(position, snapshot_id);
 		}
 	}
+	std::sort(positions_with_snapshots.begin(), positions_with_snapshots.end());
 
 	result.has_embedded_snapshots = true;
-	for (auto &entry : position_to_snapshot) {
+	for (auto &entry : positions_with_snapshots) {
 		if (snapshot_filter_min.IsValid() && entry.second < snapshot_filter_min.GetIndex()) {
 			continue;
 		}
