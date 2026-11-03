@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/deletion_vector_corrupt_file.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -49,6 +49,13 @@ query I
 SELECT sum(i) FROM ducklake.t
 ----
 45
+
+# the scan cached the deletion vector, attach again to read the file overwritten below
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/deletion_vector_corrupt_file', DATA_INLINING_ROW_LIMIT 0, WRITE_DELETION_VECTORS true)
 
 # bytes after the checksum of a bare deletion vector
 statement ok

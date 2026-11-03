@@ -1,0 +1,71 @@
+# name: test/sql/delete/delete_file_cache_memory.test
+# description: Cached rows of a delete file count toward the object cache, and DETACH removes them
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/delete_file_cache_memory', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i FROM range(200000) t(i);
+
+statement ok
+DELETE FROM ducklake.t WHERE i % 2 = 0;
+
+statement ok
+SET VARIABLE scan_before = (SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+query I
+SELECT sum(i) FROM ducklake.t;
+----
+10000000000
+
+# 100000 deleted rows of 8 bytes each
+query I
+SELECT coalesce(sum(memory_usage_bytes), 0) - getvariable('scan_before') >= 800000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+statement ok
+SET VARIABLE cache_scanned = (SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+# the deletes of a transaction-local file are not cached, as a rollback drops them
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.local_t AS SELECT i FROM range(200000) t(i);
+
+statement ok
+DELETE FROM ducklake.local_t WHERE i % 2 = 0;
+
+statement ok
+SET VARIABLE local_before = (SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+query I
+SELECT sum(i) FROM ducklake.local_t;
+----
+10000000000
+
+query I
+SELECT coalesce(sum(memory_usage_bytes), 0) - getvariable('local_before') < 800000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true
+
+statement ok
+ROLLBACK
+
+statement ok
+DETACH ducklake
+
+query I
+SELECT getvariable('cache_scanned') - coalesce(sum(memory_usage_bytes), 0) >= 800000 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true

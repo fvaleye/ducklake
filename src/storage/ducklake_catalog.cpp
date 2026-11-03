@@ -17,6 +17,7 @@
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/database_size.hpp"
+#include "storage/ducklake_delete_filter.hpp"
 #include "storage/ducklake_initializer.hpp"
 #include "storage/ducklake_metadata_profile.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -289,6 +290,11 @@ optional_idx DuckLakeTableStatsCacheEntry::GetEstimatedCacheMemory() const {
 
 optional_idx DuckLakeTableRecordCountCacheEntry::GetEstimatedCacheMemory() const {
 	return sizeof(DuckLakeTableRecordCountCacheEntry) + record_counts.size() * ESTIMATED_BYTES_PER_TABLE;
+}
+
+optional_idx DuckLakeDeleteDataCacheEntry::GetEstimatedCacheMemory() const {
+	auto rows = delete_data->deleted_rows.capacity() + delete_data->snapshot_ids.capacity();
+	return sizeof(DuckLakeDeleteDataCacheEntry) + delete_file_path.size() + rows * sizeof(idx_t);
 }
 
 optional_idx DuckLakeSchemaCacheEntry::GetEstimatedCacheMemory() const {
@@ -1120,6 +1126,20 @@ idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, Tab
 	return entry == cached->record_counts.end() ? 0 : entry->second;
 }
 
+shared_ptr<DuckLakeDeleteData> DuckLakeCatalog::GetDeleteData(ClientContext &context,
+                                                              const DuckLakeFileListEntry &file_entry) {
+	auto key = DeleteDataCacheKey(file_entry.file_id);
+	auto cached = GetObjectCacheInstance().Get<DuckLakeDeleteDataCacheEntry>(key);
+	if (cached && cached->delete_file_path == file_entry.delete_file.path) {
+		return cached->delete_data;
+	}
+	DuckLakeDeleteFilter delete_filter;
+	delete_filter.Initialize(context, file_entry.delete_file);
+	auto entry = make_shared_ptr<DuckLakeDeleteDataCacheEntry>(file_entry.delete_file.path, delete_filter.delete_data);
+	PutCacheEntry(std::move(key), entry);
+	return entry->delete_data;
+}
+
 optional_ptr<SchemaCatalogEntry> DuckLakeCatalog::LookupSchema(CatalogTransaction transaction,
                                                                const EntryLookupInfo &schema_lookup,
                                                                OnEntryNotFound if_not_found) {
@@ -1577,6 +1597,10 @@ string DuckLakeCatalog::RecordCountCacheKey(idx_t snapshot_id) const {
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
 	// a loaded schema holds the name of the DuckLake, its macros for one, so a new name loads it again
 	return StringUtil::Format("ducklake:%s:%s:schema:%llu", instance_id, GetName(), schema_version);
+}
+
+string DuckLakeCatalog::DeleteDataCacheKey(DataFileIndex file_id) const {
+	return StringUtil::Format("ducklake:%s:delete_data:file:%llu", instance_id, file_id.index);
 }
 
 void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id) {

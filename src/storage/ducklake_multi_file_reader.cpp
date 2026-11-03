@@ -338,7 +338,13 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		} else if (!file_entry.delete_file.path.empty() || !file_entry.inlined_file_deletions.empty()) {
 			auto delete_filter = make_uniq<DuckLakeDeleteFilter>();
 			if (!file_entry.delete_file.path.empty()) {
-				delete_filter->Initialize(context, file_entry.delete_file);
+				if (file_entry.file_id.IsValid()) {
+					auto &catalog = read_info.table.ParentCatalog().Cast<DuckLakeCatalog>();
+					delete_filter->delete_data = catalog.GetDeleteData(context, file_entry);
+				} else {
+					// a transaction-local file has no id yet, so its deletes are read without the cache
+					delete_filter->Initialize(context, file_entry.delete_file);
+				}
 			}
 			if (delete_map && !file_entry.delete_file.path.empty()) {
 				auto delete_data_copy = make_shared_ptr<DuckLakeDeleteData>(*delete_filter->delete_data);
@@ -346,6 +352,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			}
 			// Apply inlined file deletions (stored in metadata database instead of delete file)
 			if (!file_entry.inlined_file_deletions.empty()) {
+				// merge into a copy, as the rows of the delete file are shared with the object cache
+				delete_filter->delete_data = make_shared_ptr<DuckLakeDeleteData>(*delete_filter->delete_data);
 				DuckLakeInlinedDataDeletes inlined_deletes;
 				inlined_deletes.rows = file_entry.inlined_file_deletions;
 				delete_filter->Initialize(inlined_deletes);
