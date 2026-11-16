@@ -1,0 +1,23 @@
+# name: benchmark/micro/read/compound_calendar_pruning.benchmark
+# description: Repeat a compound month and day filter over files with disjoint TIMESTAMP ranges
+# group: [read]
+
+name Compound Calendar Pruning
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/many_files.benchmark.in
+
+run
+@for i in range(10)
+SELECT count(*), sum(id) FROM lake.events WHERE month(ts) = 2 AND day(ts) = 3 AND id >= 0;
+@end
+
+result_query II
+SELECT * FROM __answer
+----
+86400	250076116800

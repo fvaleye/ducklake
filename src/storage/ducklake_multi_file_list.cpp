@@ -215,14 +215,8 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 		return nullptr;
 	}
 
-	// the filter set carries the static filters over, so the per-column filters are rebuilt from it - but a
-	// TableFilterSet cannot round-trip a tree, so those have to be carried over by hand
-	auto pushdown_info = make_uniq<FilterPushdownInfo>();
-	if (filter_info) {
-		for (const auto &tree : filter_info->filter_trees) {
-			pushdown_info->filter_trees.push_back(tree.Copy());
-		}
-	}
+	// retain static expressions and trees that the table filter set cannot represent
+	auto pushdown_info = filter_info ? filter_info->Copy() : make_uniq<FilterPushdownInfo>();
 
 	for (auto &entry : filters) {
 		auto column_id = column_ids[entry.GetIndex().GetIndex()];
@@ -394,6 +388,23 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 	for (auto &entry : table_filter_set) {
 		auto column_id = info.column_ids[entry.GetIndex().GetIndex()];
 		AddFilterToPushdownInfo(*pushdown_info, column_id, entry.TakeFilter());
+	}
+
+	// multiple potentially throwing predicates prevent generic scan pushdown of each other
+	vector<unique_ptr<Expression>> fallible_filters;
+	combiner.GenerateFilters([&](unique_ptr<Expression> filter) {
+		if (filter->CanThrow() && filter->IsConsistent() &&
+		    filter->GetExpressionType() != ExpressionType::CONJUNCTION_OR) {
+			fallible_filters.push_back(std::move(filter));
+		}
+	});
+	if (fallible_filters.size() > 1) {
+		for (auto &filter : fallible_filters) {
+			auto node = GetExpressionFilterNode(info, *filter);
+			if (node) {
+				AddFilterNodeToPushdownInfo(*pushdown_info, *node);
+			}
+		}
 	}
 
 	// a disjunction cannot be reduced to per-column filters without losing the correlation between them

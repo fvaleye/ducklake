@@ -42,6 +42,28 @@ EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE month(ts) = 2
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
+# multiple expressions on the same column retain their file statistics pruning
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND day(ts) = 3
+----
+24
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND day(ts) = 3
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# a regular pushed filter must retain the expression filters too
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND day(ts) = 3 AND k >= 1000
+----
+24
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND day(ts) = 3 AND k >= 1000
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
 # arithmetic on the column
 query I
 SELECT count(*) FROM dl.t WHERE k // 1000 = 1
