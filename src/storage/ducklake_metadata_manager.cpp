@@ -3097,6 +3097,14 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 		if (!options.older_than.IsNull()) {
 			file_filter_clause += " AND data.begin_snapshot < " + first_snapshot_at(options.older_than);
 		}
+		candidate_files_cte =
+		    StringUtil::Format("candidate_files AS (SELECT * FROM {METADATA_CATALOG}.ducklake_data_file data "
+		                       "WHERE data.table_id=%d %s),",
+		                       table_id.index, file_filter_clause);
+		data_file_source = "candidate_files data";
+		partition_value_filter = StringUtil::Format(
+		    "\n\tWHERE table_id=%d AND data_file_id IN (SELECT data_file_id FROM candidate_files)", table_id.index);
+		file_filter_clause.clear();
 	} else if (type == CompactionType::REWRITE_DELETES) {
 		// Load inlined row IDs before selecting rewrite candidates.
 		inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot);

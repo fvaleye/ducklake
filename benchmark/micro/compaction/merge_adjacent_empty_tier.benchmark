@@ -1,0 +1,29 @@
+# name: benchmark/micro/compaction/merge_adjacent_empty_tier.benchmark
+# description: Ten merge calls whose size band excludes all 10000 partitioned files
+# group: [compaction]
+
+name Merge Adjacent Empty Tier
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work empty_tier_files_work
+
+include benchmark/micro/fixtures/inlined_deletion_files.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+@for k in range(10)
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', 't', min_file_size => 1000000);
+@end
+
+result_query IIII
+SELECT merges, (SELECT count(*) FROM ducklake_list_files('lake', 't')),
+(SELECT max(data_file_size_bytes) < 1000000 FROM ducklake_list_files('lake', 't')),
+(SELECT count(*) FROM lake.t) FROM __answer;
+----
+0	10000	true	190000

@@ -1,0 +1,48 @@
+# name: test/sql/compaction/merge_adjacent_candidate_partitions.test
+# description: File-size filters keep the partition keys of the files selected for merging
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/merge_adjacent_candidate_partitions', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.events(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.events SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.events VALUES (1, 1), (2, 2)
+
+statement ok
+INSERT INTO lake.events VALUES (3, 1), (4, 2)
+
+query I
+SELECT count(*) FROM ducklake_merge_adjacent_files('lake', 'events', min_file_size => 1000000)
+----
+0
+
+query II
+SELECT sum(files_processed), sum(files_created)
+FROM ducklake_merge_adjacent_files('lake', 'events', max_file_size => 1000000)
+----
+4	2
+
+query III
+SELECT p, count(*), sum(id) FROM lake.events GROUP BY p ORDER BY p
+----
+1	2	4
+2	2	6
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 'events')
+----
+2

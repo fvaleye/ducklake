@@ -189,6 +189,7 @@
         "test/sql/cleanup/read_only_attach_cleanup.test",
         "test/sql/compaction/compaction_added_file_finer_timestamps.test",
         "test/sql/compaction/compaction_transient_partition_spec.test",
+        "test/sql/compaction/merge_adjacent_candidate_partitions.test",
         "test/sql/compaction/merge_adjacent_nested_field_readded.test",
         "test/sql/compaction/merge_adjacent_row_group_size.test",
         "test/sql/compaction/merge_adjacent_target_size_heuristics.test",
