@@ -487,8 +487,11 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	set<idx_t> sorted_deletes;
 	for (auto &chunk : deleted_rows.Chunks()) {
 		auto row_data = FlatVector::GetData<uint64_t>(chunk.data[0]);
+		D_ASSERT(chunk.size() > 0);
+		// positions ascend within a chunk, so each one is inserted right before this hint
+		auto insertion_hint = sorted_deletes.lower_bound(row_data[0]);
 		for (idx_t r = 0; r < chunk.size(); r++) {
-			sorted_deletes.insert(row_data[r]);
+			sorted_deletes.insert(insertion_hint, row_data[r]);
 		}
 	}
 	if (sorted_deletes.size() != deleted_rows.Count() && !allow_duplicates) {
