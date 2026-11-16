@@ -1,0 +1,59 @@
+# name: test/sql/delete/delete_file_cache_two_lakes.test
+# description: Two DuckLakes with the same data file ids keep their own cached deleted rows
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DUCKLAKE_CONNECTION_2 {TEST_DIR}/{UUID}_2.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake1 (DATA_PATH '{DATA_PATH}/delete_file_cache_lake1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION_2}' AS lake2 (DATA_PATH '{DATA_PATH}/delete_file_cache_lake2', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake1.t AS SELECT i FROM range(100) t(i);
+
+statement ok
+CREATE TABLE lake2.t AS SELECT i FROM range(100) t(i);
+
+statement ok
+DELETE FROM lake1.t WHERE i < 10;
+
+statement ok
+DELETE FROM lake2.t WHERE i >= 90;
+
+query I
+SELECT sum(i) FROM lake1.t;
+----
+4905
+
+query I
+SELECT sum(i) FROM lake2.t;
+----
+4005
+
+statement ok
+CALL enable_logging('FileSystem')
+
+query I
+SELECT sum(i) FROM lake1.t;
+----
+4905
+
+query I
+SELECT sum(i) FROM lake2.t;
+----
+4005
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('FileSystem') WHERE path LIKE '%-delete.%' AND op = 'OPEN';
+----
+0

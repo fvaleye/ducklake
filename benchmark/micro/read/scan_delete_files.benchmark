@@ -1,0 +1,25 @@
+# name: benchmark/micro/read/scan_delete_files.benchmark
+# description: Repeat a scan of 500 files that each have a delete file at one snapshot
+# group: [read]
+
+name Scan Delete Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work scan_delete_files_work
+
+include benchmark/micro/fixtures/compaction.benchmark.in
+
+run
+@for i in range(20)
+SELECT sum(k) FROM lake.rw;
+@end
+
+result_query I
+SELECT * FROM __answer
+----
+204584848

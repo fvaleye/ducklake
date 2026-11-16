@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/delete_file_corrupt.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -23,6 +23,13 @@ query I
 SELECT sum(i) FROM ducklake.t
 ----
 45
+
+# the scan cached the rows of the delete file, attach again to read the file overwritten below
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/delete_file_corrupt', DATA_INLINING_ROW_LIMIT 0, WRITE_DELETION_VECTORS false)
 
 statement ok
 SET VARIABLE delete_path = (SELECT delete_file FROM ducklake_list_files('ducklake', 't'))

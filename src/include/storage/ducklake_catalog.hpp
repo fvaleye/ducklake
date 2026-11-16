@@ -40,6 +40,7 @@ class DuckLakeCatalog;
 class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
+struct DuckLakeDeleteData;
 struct DuckLakeConfigOption;
 struct DuckLakeConfigOptionUndo;
 struct DuckLakeSnapshotCommit;
@@ -105,6 +106,24 @@ struct DuckLakeTableRecordCountCacheEntry : public ObjectCacheEntry {
 
 	static string ObjectType() {
 		return "ducklake_table_record_counts";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override;
+};
+
+//! Cached deleted rows of a data file, read from delete_file_path
+struct DuckLakeDeleteDataCacheEntry : public ObjectCacheEntry {
+	DuckLakeDeleteDataCacheEntry(string delete_file_path_p, shared_ptr<DuckLakeDeleteData> delete_data_p)
+	    : delete_file_path(std::move(delete_file_path_p)), delete_data(std::move(delete_data_p)) {
+	}
+
+	string delete_file_path;
+	shared_ptr<DuckLakeDeleteData> delete_data;
+
+	static string ObjectType() {
+		return "ducklake_delete_data";
 	}
 	string GetObjectType() override {
 		return ObjectType();
@@ -305,6 +324,8 @@ public:
 	optional_idx GetTableNetRowCount(DuckLakeTransaction &transaction, DuckLakeTableEntry &table);
 	//! Returns zero when the table has no stats
 	idx_t GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id);
+	//! Shared with the object cache, so callers copy it before changing it
+	shared_ptr<DuckLakeDeleteData> GetDeleteData(ClientContext &context, const DuckLakeFileListEntry &file_entry);
 
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        SchemaIndex schema_id);
@@ -508,6 +529,7 @@ private:
 	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string NetRowCountCacheKey(TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
+	string DeleteDataCacheKey(DataFileIndex file_id) const;
 	ObjectCache &GetObjectCacheInstance();
 	//! A table stats entry this DuckLake put in the object cache, kept without its key as there is one per table
 	struct TrackedStatsEntry {
@@ -558,7 +580,7 @@ private:
 	//! A per-instance identifier used to scope ObjectCache keys.
 	string instance_id;
 	mutex cache_entries_lock;
-	//! The schema and record count entries this DuckLake put in the object cache, an expired one was evicted
+	//! The entries other than table stats this DuckLake put in the object cache, an expired one was evicted
 	unordered_map<string, weak_ptr<ObjectCacheEntry>> cache_entries;
 	vector<TrackedStatsEntry> stats_cache_entries;
 	//! The number of tracked entries at which the evicted ones are forgotten
