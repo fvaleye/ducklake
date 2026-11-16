@@ -1,0 +1,108 @@
+# name: test/sql/list_files/list_files_projected_chunks.test
+# description: File listings preserve projections, NULLs and the last output chunk
+# group: [list_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/list_files_projected_chunks', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(p INTEGER, i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.t SELECT i // 2, i FROM range(4102) t(i)
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+2051
+
+statement ok
+CREATE TEMP TABLE expected AS FROM ducklake_list_files('ducklake', 't')
+
+query I
+SELECT count(*) FROM (
+    SELECT delete_file, data_file_size_bytes, data_file, data_file FROM ducklake_list_files('ducklake', 't')
+    EXCEPT ALL
+    SELECT delete_file, data_file_size_bytes, data_file, data_file FROM expected
+)
+----
+0
+
+query IIII
+SELECT count(data_file), count(delete_file), count(data_file_encryption_key), count(delete_file_encryption_key)
+FROM ducklake_list_files('ducklake', 't')
+----
+2051	0	0	0
+
+query I
+SELECT count(*) FROM (SELECT data_file FROM ducklake_list_files('ducklake', 't') LIMIT 10)
+----
+10
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 0
+
+query III
+SELECT count(delete_file), count(delete_file_size_bytes), count(delete_file_footer_size)
+FROM ducklake_list_files('ducklake', 't')
+----
+1	1	1
+
+query II
+SELECT count(data_file), count(delete_file) FROM ducklake_list_files('ducklake', 't', snapshot_version => 3)
+----
+2051	0
+
+statement ok
+PREPARE listing_count AS SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+
+query I
+EXECUTE listing_count
+----
+2051
+
+statement ok
+INSERT INTO ducklake.t VALUES (2051, 4102), (2051, 4103)
+
+query I
+EXECUTE listing_count
+----
+2052
+
+statement ok
+CREATE TABLE ducklake.empty_table(i INTEGER)
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 'empty_table')
+----
+0
+
+statement ok
+CREATE TABLE ducklake.inlined_deletes AS SELECT i FROM range(20) t(i)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'inlined_deletes')
+
+statement ok
+DELETE FROM ducklake.inlined_deletes WHERE i < 5
+
+query II
+SELECT count(data_file), count(delete_file) FROM ducklake_list_files('ducklake', 'inlined_deletes')
+----
+1	0
+
+query I
+SELECT count(*) FROM ducklake.inlined_deletes
+----
+15

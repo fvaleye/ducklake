@@ -1,0 +1,27 @@
+# name: benchmark/micro/read/list_files_paths.benchmark
+# description: List both paths of 10000 files with inlined deletions, five times
+# group: [read]
+
+name List File Paths
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work list_files_paths_work
+
+include benchmark/micro/fixtures/inlined_deletion_files.benchmark.in
+
+run
+SELECT data_file, delete_file FROM ducklake_list_files('lake', 't');
+SELECT data_file, delete_file FROM ducklake_list_files('lake', 't');
+SELECT data_file, delete_file FROM ducklake_list_files('lake', 't');
+SELECT data_file, delete_file FROM ducklake_list_files('lake', 't');
+SELECT data_file, delete_file FROM ducklake_list_files('lake', 't');
+
+result_query III
+SELECT count(data_file), count(delete_file), (SELECT count(*) FROM lake.t) FROM __answer
+----
+10000	0	190000

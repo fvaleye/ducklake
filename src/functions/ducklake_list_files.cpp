@@ -8,28 +8,30 @@
 
 namespace duckdb {
 
-static void AddFileInfo(DuckLakeFileData &file_info, vector<Value> &row_values) {
-	// add the file info - if we have a file
-	if (file_info.path.empty()) {
-		// no file - push NULL values
-		// this can happen for delete files
-		row_values.emplace_back();
-		row_values.emplace_back();
-		row_values.emplace_back();
-		row_values.emplace_back();
-		return;
+struct DuckLakeListFilesBindData : public TableFunctionData {
+	vector<DuckLakeFileListEntry> files;
+};
+
+struct DuckLakeListFilesState : public GlobalTableFunctionState {
+	vector<column_t> column_ids;
+	idx_t offset = 0;
+};
+
+static Value GetFileValue(const DuckLakeFileData &file, idx_t column_id) {
+	if (file.path.empty()) {
+		return Value();
 	}
-	row_values.emplace_back(file_info.path);
-	row_values.push_back(Value::UBIGINT(file_info.file_size_bytes));
-	if (file_info.footer_size.IsValid()) {
-		row_values.push_back(Value::UBIGINT(file_info.footer_size.GetIndex()));
-	} else {
-		row_values.emplace_back();
-	}
-	if (file_info.encryption_key.empty()) {
-		row_values.emplace_back();
-	} else {
-		row_values.emplace_back(Value::BLOB_RAW(file_info.encryption_key));
+	switch (column_id) {
+	case 0:
+		return Value(file.path);
+	case 1:
+		return Value::UBIGINT(file.file_size_bytes);
+	case 2:
+		return file.footer_size.IsValid() ? Value::UBIGINT(file.footer_size.GetIndex()) : Value();
+	case 3:
+		return file.encryption_key.empty() ? Value() : Value::BLOB_RAW(file.encryption_key);
+	default:
+		throw InternalException("Invalid file listing column %llu", column_id);
 	}
 }
 
@@ -92,24 +94,42 @@ static unique_ptr<FunctionData> DuckLakeListFilesBind(ClientContext &context, Ta
 	// FIXME: support predicate pushdown
 	// only the files are listed, not the columns of the inlined rows
 	vector<DuckLakeProjectedColumn> no_columns;
-	auto files = metadata_manager.GetFilesForTable(ducklake_table, snapshot, nullptr, true, no_columns);
-	// generate the result
-	auto result = make_uniq<MetadataBindData>();
-	for (auto &file : files) {
-		vector<Value> row_values;
-		// data file
-		auto &data_file = file.file;
-		AddFileInfo(data_file, row_values);
-
-		auto &delete_file = file.delete_file;
-		AddFileInfo(delete_file, row_values);
-		result->rows.push_back(std::move(row_values));
+	auto result = make_uniq<DuckLakeListFilesBindData>();
+	result->files = metadata_manager.GetFilesForTable(ducklake_table, snapshot, nullptr, true, no_columns);
+	for (auto &file : result->files) {
+		file.inlined_file_deletions.clear();
 	}
 	return std::move(result);
 }
 
+static unique_ptr<GlobalTableFunctionState> DuckLakeListFilesInit(ClientContext &context,
+                                                                  TableFunctionInitInput &input) {
+	auto result = make_uniq<DuckLakeListFilesState>();
+	result->column_ids = input.column_ids;
+	return std::move(result);
+}
+
+static void DuckLakeListFilesExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &data = data_p.bind_data->Cast<DuckLakeListFilesBindData>();
+	auto &state = data_p.global_state->Cast<DuckLakeListFilesState>();
+	auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, data.files.size() - state.offset);
+	for (idx_t col_idx = 0; col_idx < output.ColumnCount(); col_idx++) {
+		auto column_id = state.column_ids[col_idx];
+		for (idx_t row_idx = 0; row_idx < count; row_idx++) {
+			auto &entry = data.files[state.offset + row_idx];
+			auto &file = column_id < 4 ? entry.file : entry.delete_file;
+			output.data[col_idx].Append(GetFileValue(file, column_id % 4));
+		}
+	}
+	state.offset += count;
+	output.SetChildCardinality(count);
+}
+
 DuckLakeListFilesFunction::DuckLakeListFilesFunction()
     : DuckLakeBaseMetadataFunction("ducklake_list_files", DuckLakeListFilesBind) {
+	function = DuckLakeListFilesExecute;
+	init_global = DuckLakeListFilesInit;
+	projection_pushdown = true;
 	GetSignature()
 	    .AddPositionalOnly("table_name", LogicalType::VARCHAR)
 	    .WithTypedKwargs("options", [&](TypedKwargs &options) {
