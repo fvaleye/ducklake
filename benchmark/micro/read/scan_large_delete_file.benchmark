@@ -1,0 +1,23 @@
+# name: benchmark/micro/read/scan_large_delete_file.benchmark
+# description: Run 8 full scans of a table whose data file has a Parquet delete file of 1.8 million positions
+# group: [read]
+
+name Scan Large Delete File
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/large_delete_file.benchmark.in
+
+run
+@for k in range(8)
+SELECT count(*) AS row_count, sum(payload) AS payload_sum FROM lake.events;
+@end
+
+result_query II
+SELECT * FROM __answer
+----
+200000	99997037153

@@ -202,6 +202,8 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 	int64_t last_delete = -1;
 
 	while (scanner.Scan(scan_chunk)) {
+		auto new_start = result.deleted_rows.size();
+		result.deleted_rows.resize(new_start + scan_chunk.size());
 		auto positions = scan_chunk.data[1].Values<int64_t>();
 		for (idx_t i = 0; i < scan_chunk.size(); i++) {
 			auto position = positions[i];
@@ -215,19 +217,20 @@ DeleteFileScanResult DuckLakeDeleteFilter::ScanDeleteFile(ClientContext &context
 				    row_id, last_delete);
 			}
 
-			result.deleted_rows.push_back(row_id);
+			result.deleted_rows[new_start + i] = row_id;
 			last_delete = row_id;
 		}
 		if (!has_snapshot_id) {
 			continue;
 		}
+		result.snapshot_ids.resize(result.deleted_rows.size());
 		auto snapshot_ids = scan_chunk.data[2].Values<int64_t>();
 		for (idx_t i = 0; i < scan_chunk.size(); i++) {
 			auto snapshot_id = snapshot_ids[i];
 			if (!snapshot_id.IsValid()) {
 				throw InvalidInputException("Invalid delete data - snapshot_id cannot be NULL");
 			}
-			result.snapshot_ids.push_back(NumericCast<idx_t>(snapshot_id.GetValue()));
+			result.snapshot_ids[new_start + i] = NumericCast<idx_t>(snapshot_id.GetValue());
 		}
 	}
 	return result;

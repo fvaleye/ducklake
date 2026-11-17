@@ -1,0 +1,23 @@
+# name: benchmark/micro/fixtures/large_delete_file.benchmark.in
+# description: Read-only lake with one data file of 2 million rows whose Parquet delete file has 1.8 million positions
+# group: [fixtures]
+
+cache_file large_delete_file_ready.marker
+
+load
+@create large_delete_file
+@attach large_delete_file AS lake (DATA_PATH '${BENCHMARK_DIR}/large_delete_file_data')
+CREATE TABLE lake.events AS SELECT i AS id, (i * 104729) % 1000003 AS payload FROM range(2000000) t(i);
+DELETE FROM lake.events WHERE id % 10 != 9;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'events')) <> 1
+OR (SELECT count(*) <> 1 OR sum(delete_count) <> 1800000 OR min(format) <> 'parquet'
+FROM __ducklake_metadata_lake.ducklake_delete_file)
+THEN error('expected one data file with one Parquet delete file of 1.8 million positions') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal large_delete_file
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/large_delete_file_ready.marker' (FORMAT CSV);
+@attach large_delete_file AS lake (READ_ONLY)
+
+reload
+@attach large_delete_file AS lake (READ_ONLY)
