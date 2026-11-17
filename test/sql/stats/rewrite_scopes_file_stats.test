@@ -1,0 +1,105 @@
+# name: test/sql/stats/rewrite_scopes_file_stats.test
+# description: File statistics recomputation reads only the affected table and keeps unrelated bounds
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rewrite_removed_file_stats', METADATA_CATALOG 'rewrite_stats_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET threads = 1
+
+statement ok
+CREATE TABLE dl.t(id BIGINT)
+
+statement ok
+SET VARIABLE target_table_id = (SELECT table_id FROM rewrite_stats_meta.ducklake_table WHERE table_name = 't')
+
+statement ok
+CREATE TABLE dl.unrelated(id BIGINT)
+
+statement ok
+INSERT INTO dl.unrelated VALUES (-300), (-200), (-100)
+
+loop part 0 3
+
+statement ok
+INSERT INTO dl.t SELECT range + {part} * 100 FROM range(100)
+
+endloop
+
+statement ok
+SET VARIABLE original_snapshot = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'))
+
+statement ok
+CALL enable_logging(level = 'debug', storage = 'memory')
+
+statement ok
+DELETE FROM dl.t WHERE id < 100
+
+statement ok
+CALL disable_logging()
+
+# Every file-statistics scan sent to PostgreSQL restricts the target table before returning rows
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) = 'postgres' THEN
+	(SELECT count(*) > 0 AND bool_and(regexp_matches(message,
+	    printf('(?s)WHERE.*table_id.{0,3}= %d', getvariable('target_table_id'))))
+	 FROM duckdb_logs WHERE type = 'PostgresQueryLog' AND contains(message, 'ducklake_file_column_stats'))
+	ELSE true END
+----
+true
+
+query III
+SELECT count(*), min(id), max(id) FROM dl.t
+----
+200	100	299
+
+statement ok
+DELETE FROM dl.t WHERE id >= 250
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+query IIII
+SELECT count(*), min(id), max(id), sum(id) FROM dl.t
+----
+150	100	249	26175
+
+query II
+SELECT min_value, max_value FROM rewrite_stats_meta.ducklake_table_column_stats WHERE table_id = getvariable('target_table_id')
+----
+100	249
+
+query III
+SELECT count(*), min(id), max(id) FROM dl.t AT (VERSION => getvariable('original_snapshot'))
+----
+300	0	299
+
+statement ok
+DELETE FROM dl.t WHERE id % 2 = 0
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+query IIII
+SELECT count(*), min(id), max(id), sum(id) FROM dl.t
+----
+75	101	249	13125
+
+query II
+SELECT min_value, max_value FROM rewrite_stats_meta.ducklake_table_column_stats WHERE table_id = getvariable('target_table_id')
+----
+101	249
+
+query IIII
+SELECT count(*), min(id), max(id), sum(id) FROM dl.unrelated
+----
+3	-300	-100	-600

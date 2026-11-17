@@ -4523,14 +4523,14 @@ string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_
 	}
 	return StringUtil::Format("\nSELECT " + select_list + R"(
 FROM {METADATA_CATALOG}.ducklake_data_file data
-LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats ON stats.data_file_id = data.data_file_id
+LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats ON stats.data_file_id = data.data_file_id AND stats.table_id = %d
 WHERE data.table_id = %d
   AND data.data_file_id < {NEXT_FILE_ID}
   AND {SNAPSHOT_ID} >= data.begin_snapshot
   AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 ORDER BY data.data_file_id ASC;
 )",
-	                          table_id.index);
+	                          table_id.index, table_id.index);
 }
 
 //! The schema and table paths of the listed tables, read by ReadTablePath
