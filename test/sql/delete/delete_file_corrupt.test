@@ -28,6 +28,10 @@ statement ok
 SET VARIABLE delete_path = (SELECT delete_file FROM ducklake_list_files('ducklake', 't'))
 
 # a delete file holds the file path and the position of every deleted row
+# This fixture overwrites the file, so its optional footer hint no longer applies.
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_delete_file SET footer_size = NULL
+
 statement ok
 COPY (SELECT 42 AS x) TO (getvariable('delete_path')) (FORMAT PARQUET)
 

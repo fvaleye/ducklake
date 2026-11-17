@@ -1,0 +1,71 @@
+# name: test/sql/delete/delete_footer_hint.test
+# description: Delete-file scans use the recorded footer size instead of reading data pages to find the footer
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+require json
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/delete_footer_hint.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/delete_footer_hint', DATA_INLINING_ROW_LIMIT 0, WRITE_DELETION_VECTORS false)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(10000)
+
+statement ok
+DELETE FROM dl.t WHERE i % 3 = 0
+
+statement ok
+CALL enable_logging('FileSystem', storage => 'memory')
+
+query I
+SELECT sum(i) FROM dl.t
+----
+33326667
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT sum(json_extract_string(message, '$.bytes')::BIGINT) <= (SELECT file_size_bytes FROM __ducklake_metadata_dl.ducklake_delete_file)
+FROM duckdb_logs
+WHERE json_extract_string(message, '$.op') = 'READ' AND message LIKE '%-delete.parquet%'
+----
+1
+
+# A stale hint is rejected before interpreting the delete rows.
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_delete_file SET footer_size = 0
+
+# Reattach so cached decoded rows cannot hide the changed footer hint.
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/delete_footer_hint', DATA_INLINING_ROW_LIMIT 0, WRITE_DELETION_VECTORS false)
+
+statement error
+SELECT sum(i) FROM dl.t
+----
+Invalid footer length provided
+
+# A catalog without the optional footer hint still reads the file.
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_delete_file SET footer_size = NULL
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/delete_footer_hint', DATA_INLINING_ROW_LIMIT 0, WRITE_DELETION_VECTORS false)
+
+query I
+SELECT sum(i) FROM dl.t
+----
+33326667

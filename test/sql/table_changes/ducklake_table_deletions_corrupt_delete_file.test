@@ -31,6 +31,10 @@ SELECT rowid, i FROM ducklake_table_deletions('ducklake', 'main', 't', getvariab
 statement ok
 SET VARIABLE delete_path = (SELECT delete_file FROM ducklake_list_files('ducklake', 't'))
 
+# This fixture overwrites the file, so its optional footer hint no longer applies.
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_delete_file SET footer_size = NULL
+
 statement ok
 COPY (SELECT 'f' AS file_path, 100::BIGINT AS pos) TO (getvariable('delete_path')) (FORMAT PARQUET)
 
@@ -69,6 +73,10 @@ query II
 SELECT count(*), min(i) FROM ducklake_table_deletions('ducklake', 'main', 't2', getvariable('file_delete'), getvariable('file_delete'))
 ----
 8	2
+
+# This fixture overwrites the file, so its optional footer hint no longer applies.
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_delete_file SET footer_size = NULL
 
 statement ok
 COPY (SELECT * FROM (VALUES ('f', 0::BIGINT, getvariable('first_delete')), ('f', 1::BIGINT, getvariable('second_delete')),
