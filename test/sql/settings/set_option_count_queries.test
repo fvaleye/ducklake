@@ -1,0 +1,92 @@
+# name: test/sql/settings/set_option_count_queries.test
+# description: Postgres option commits read row counts and matching values in one metadata query
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+(DATA_PATH '{DATA_PATH}/set_option_count_queries', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+SET logging_storage = 'memory'
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+CALL lake.set_option('parquet_compression', 'snappy')
+
+statement ok
+CALL lake.set_option('parquet_compression', 'gzip', schema => 'main')
+
+statement ok
+CALL lake.set_option('parquet_compression', 'zstd', table_name => 't')
+
+statement ok
+CALL disable_logging()
+
+# Each SET counts the existing rows, then checks both counts once under the commit lock.
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SELECT COUNT(*)%' AND query LIKE '%ducklake_metadata%'
+  AND query LIKE '%key = ''parquet_compression''%'
+----
+6
+
+query III
+SELECT scope, value, scope_entry FROM lake.options()
+WHERE option_name = 'parquet_compression' ORDER BY scope
+----
+GLOBAL	snappy	NULL
+SCHEMA	gzip	main
+TABLE	zstd	main.t
+
+statement ok
+BEGIN
+
+statement ok
+CALL lake.set_option('parquet_compression', 'gzip', table_name => 't')
+
+statement ok
+CALL lake.set_option('parquet_compression', 'lz4', table_name => 't')
+
+statement ok
+COMMIT
+
+query IT
+SELECT count(*), max(value) FROM lake.options()
+WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t'
+----
+1	lz4
+
+statement ok
+BEGIN
+
+statement ok
+CALL lake.set_option('parquet_compression', 'snappy', table_name => 't')
+
+statement ok
+ALTER TABLE lake.t RESET (parquet_compression)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM lake.options()
+WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t'
+----
+0

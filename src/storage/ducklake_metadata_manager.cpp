@@ -6701,21 +6701,26 @@ DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
 }
 
 idx_t DuckLakeMetadataManager::ConfigOptionRowCount(const DuckLakeConfigOption &option,
-                                                    optional_ptr<const string> value) {
+                                                    optional_ptr<idx_t> matching_rows) {
 	string scope;
 	string scope_id;
 	string scope_filter;
 	ConfigOptionScope(option, scope, scope_id, scope_filter);
-	if (value) {
-		scope_filter += StringUtil::Format(" AND value = %s", SQLString(*value));
+	string matching_count;
+	if (matching_rows) {
+		matching_count = StringUtil::Format(", COUNT(CASE WHEN value = %s THEN 1 END)", SQLString(option.option.value));
 	}
 	auto result = Query(StringUtil::Format(R"(
-SELECT COUNT(*)
+SELECT COUNT(*)%s
 FROM {METADATA_CATALOG}.ducklake_metadata
 WHERE key = %s AND %s
 )",
-	                                       SQLString(option.option.key), scope_filter));
-	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+	                                       matching_count, SQLString(option.option.key), scope_filter));
+	auto chunk = result->Fetch();
+	if (matching_rows) {
+		*matching_rows = chunk->GetValue(1, 0).GetValue<idx_t>();
+	}
+	return chunk->GetValue(0, 0).GetValue<idx_t>();
 }
 
 idx_t DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {

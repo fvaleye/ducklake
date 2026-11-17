@@ -1979,13 +1979,13 @@ bool DuckLakeTransaction::ConfigOptionsWrittenByOthers() {
 		if (changed_again) {
 			continue;
 		}
-		auto rows = metadata_manager->ConfigOptionRowCount(change.option);
+		idx_t matching_rows = 0;
+		auto rows = metadata_manager->ConfigOptionRowCount(change.option, change.reset ? nullptr : &matching_rows);
 		if (rows != change.metadata_rows) {
 			return true;
 		}
 		// under READ COMMITTED a set matches no row when another commit reset the option and set it again
-		if (!change.reset &&
-		    metadata_manager->ConfigOptionRowCount(change.option, &change.option.option.value) != rows) {
+		if (!change.reset && matching_rows != rows) {
 			return true;
 		}
 	}
