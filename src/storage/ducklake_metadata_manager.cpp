@@ -6167,47 +6167,17 @@ WHERE data_file_id IN (%s);
 	return batch_query + InsertValuesSql("ducklake_files_scheduled_for_deletion", scheduled_deletions);
 }
 string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions) {
-	if (compactions.empty()) {
-		return {};
-	}
-	unordered_map<idx_t, idx_t> table_idx_last_snapshot;
-	for (idx_t i = compactions.size(); i > 0; i--) {
-		auto &compaction = compactions[i - 1];
-		if (table_idx_last_snapshot.find(compaction.table_index.index) == table_idx_last_snapshot.end()) {
-			table_idx_last_snapshot[compaction.table_index.index] = compaction.rewrite_snapshot.GetIndex();
-		}
-	}
-
-	string batch_query;
-	for (idx_t i = 0; i < compactions.size(); ++i) {
-		auto &compaction = compactions[i];
+	set<DataFileIndex> data_file_ids;
+	set<DataFileIndex> delete_file_ids;
+	for (auto &compaction : compactions) {
 		D_ASSERT(!compaction.path.empty());
+		data_file_ids.insert(compaction.source_id);
 		if (compaction.delete_file_id.IsValid() && !compaction.delete_file_end_snapshot.IsValid()) {
-			batch_query += StringUtil::Format(R"(
-				UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
-				WHERE delete_file_id = %llu;
-				)",
-			                                  table_idx_last_snapshot[compaction.table_index.index],
-			                                  compaction.delete_file_id.index);
-		}
-		// We must update the data file table
-		batch_query +=
-		    StringUtil::Format(R"(
-		UPDATE {METADATA_CATALOG}.ducklake_data_file SET end_snapshot = %llu
-		WHERE data_file_id = %llu;
-		)",
-		                       table_idx_last_snapshot[compaction.table_index.index], compaction.source_id.index);
-		// update the snapshot of our newly added file (if it was created)
-		if (compaction.new_id.IsValid()) {
-			batch_query +=
-			    StringUtil::Format(R"(
-				UPDATE {METADATA_CATALOG}.ducklake_data_file SET begin_snapshot = %llu
-				WHERE data_file_id = %llu;
-				)",
-			                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
+			delete_file_ids.insert(compaction.delete_file_id);
 		}
 	}
-	return batch_query;
+	// the rewritten files and their delete files end at the commit snapshot
+	return FlushDrop("ducklake_delete_file", "delete_file_id", delete_file_ids) + DropDataFiles(data_file_ids);
 }
 
 string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions,

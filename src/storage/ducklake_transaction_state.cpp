@@ -854,7 +854,6 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 			}
 
 			vector<DuckLakeFileInfo> output_files;
-			optional_idx first_new_id;
 			idx_t output_row_count = 0;
 			for (auto &written_file : compaction.written_files) {
 				optional_idx file_row_id_start;
@@ -865,9 +864,6 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 				new_file.begin_snapshot = output_begin_snapshot;
 				if (output_max_partial_snapshot.IsValid()) {
 					new_file.max_partial_file_snapshot = output_max_partial_snapshot;
-				}
-				if (!first_new_id.IsValid()) {
-					first_new_id = new_file.id.index;
 				}
 				output_row_count += new_file.row_count;
 				output_files.push_back(std::move(new_file));
@@ -884,10 +880,6 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 				file_info.path = compacted_file.file.data.path;
 				file_info.source_id = compacted_file.file.id;
 				file_info.table_index = table_id;
-				file_info.rewrite_snapshot = commit_snapshot.snapshot_id;
-				if (has_new_files) {
-					file_info.new_id = DataFileIndex(first_new_id.GetIndex());
-				}
 
 				if (!compacted_file.delete_files.empty()) {
 					file_info.delete_file_path = compacted_file.delete_files.back().data.path;

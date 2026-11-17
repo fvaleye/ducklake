@@ -39,6 +39,9 @@ statement ok
 CREATE MACRO metadata_queries() AS (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata'))
 
 statement ok
+CREATE MACRO metadata_updates() AS (SELECT sum(len(regexp_extract_all(query, 'UPDATE '))) FROM duckdb_logs_parsed('DuckLakeMetadata'))
+
+statement ok
 CREATE MACRO warm_up() AS TABLE SELECT count(*) FROM ducklake.few UNION ALL SELECT count(*) FROM ducklake.many
 
 # inserts that write 4 and 40 files
@@ -138,6 +141,49 @@ SELECT getvariable('few_files_insert') > 0 AND getvariable('few_files_insert') =
 getvariable('few_files_delete') > 0 AND getvariable('few_files_delete') = getvariable('many_files_delete')
 ----
 true	true
+
+# rewrites of the 4 and 40 files with deletes
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'few', delete_threshold => 0)
+
+statement ok
+SET VARIABLE few_files_rewrite = metadata_updates()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'many', delete_threshold => 0)
+
+statement ok
+SET VARIABLE many_files_rewrite = metadata_updates()
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+query I
+SELECT getvariable('few_files_rewrite') > 0 AND getvariable('few_files_rewrite') = getvariable('many_files_rewrite')
+----
+true
 
 # transactions that insert into 2 and 12 tables, and that create 2 and 12 tables with data
 loop i 0 12

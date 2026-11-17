@@ -563,8 +563,6 @@ struct DuckLakeCompactionEntry {
 struct DuckLakeCompactedFileInfo {
 	string path;
 	DataFileIndex source_id;
-	DataFileIndex new_id;
-	optional_idx rewrite_snapshot;
 	//! Info on delete files, in case the compaction is a delete-rewrite
 	string delete_file_path;
 	DataFileIndex delete_file_id;
