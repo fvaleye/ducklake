@@ -2,6 +2,7 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/types/hash.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -231,7 +232,11 @@ struct DuckLakeCompactionGroupHash {
 		if (group.partition_id.IsValid()) {
 			hash ^= std::hash<idx_t>()(group.partition_id.GetIndex());
 		}
-		for (auto &val : group.partition_values) {
+		for (idx_t value_idx = 0; value_idx < group.partition_values.size(); value_idx++) {
+			if (value_idx > 0) {
+				hash = duckdb::Hash<uint64_t>(hash);
+			}
+			auto &val = group.partition_values[value_idx];
 			if (val.IsNull()) {
 				hash ^= 0x9E3779B97F4A7C15ULL;
 			} else {

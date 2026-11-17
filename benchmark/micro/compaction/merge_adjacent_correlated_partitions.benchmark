@@ -1,0 +1,30 @@
+# name: benchmark/micro/compaction/merge_adjacent_correlated_partitions.benchmark
+# description: Group 4000 correlated identity partitions with one file each and no merge candidates
+# group: [compaction]
+
+name Merge Adjacent Correlated Partitions
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work correlated_partition_work
+
+include benchmark/micro/fixtures/correlated_partition_compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT count(*) AS groups_rewritten
+FROM ducklake_merge_adjacent_files('lake', 'events', max_compacted_files => 1);
+
+result_query IIII
+SELECT groups_rewritten,
+(SELECT count(*) FROM ducklake_list_files('lake', 'events')),
+(SELECT count(*) FROM lake.events),
+(SELECT sum(payload) FROM lake.events)
+FROM __answer;
+----
+0	4000	4000	7998000
