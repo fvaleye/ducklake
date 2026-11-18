@@ -542,6 +542,7 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() const {
 	result->has_projection = has_projection;
 	result->projection = projection;
 	result->read_file_list = read_file_list;
+	result->pruned_file_count = pruned_file_count;
 	result->delete_scans = delete_scans;
 	result->inlined_data_tables = inlined_data_tables;
 	return std::move(result);
@@ -844,6 +845,22 @@ void DuckLakeMultiFileList::SetProjection(vector<DuckLakeProjectedColumn> column
 	}
 	has_projection = true;
 	projection = std::move(columns);
+}
+
+void DuckLakeMultiFileList::PruneFilesByFilter(ClientContext &context) const {
+	GetFiles();
+	if (!filter_info) {
+		return;
+	}
+	lock_guard<mutex> l(file_lock);
+	auto original_count = files.size();
+	files.erase(std::remove_if(files.begin(), files.end(),
+	                           [&](const DuckLakeFileListEntry &file_entry) {
+		                           return DuckLakeMultiFileReader::CanSkipFileByFilter(file_entry, *filter_info,
+		                                                                               context, false);
+	                           }),
+	            files.end());
+	pruned_file_count += original_count - files.size();
 }
 
 const vector<DuckLakeFileListEntry> &DuckLakeMultiFileList::GetFiles() const {

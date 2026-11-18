@@ -40,7 +40,27 @@ SELECT count(*) FROM dl.t WHERE month(ts) = 2
 query II
 EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE month(ts) = 2
 ----
-analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*Total Files Skipped: 2.*
+
+# the files that the statistics rule out are not opened
+statement ok
+CALL enable_logging('FileSystem', storage => 'memory')
+
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2
+----
+672
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(DISTINCT regexp_extract(message, '"path":"([^"]*)"', 1)) FROM duckdb_logs WHERE message LIKE '%.parquet%'
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs()
 
 # arithmetic on the column
 query I
@@ -62,7 +82,26 @@ SELECT count(*) FROM dl.t WHERE k // 100 = 8
 query II
 EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE k // 100 = 8
 ----
-analyzed_plan	<REGEX>:.*Total Files Read: 0.*
+analyzed_plan	<REGEX>:.*Total Files Read: 0.*Total Files Skipped: 3.*
+
+statement ok
+CALL enable_logging('FileSystem', storage => 'memory')
+
+query I
+SELECT count(*) FROM dl.t WHERE k // 100 = 8
+----
+0
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE message LIKE '%.parquet%'
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs()
 
 # together with a filter the file list query expresses, on another column and on the same column
 query I
@@ -201,3 +240,60 @@ query I
 SELECT count(*) FROM dl.t WHERE month(ts) IS NULL
 ----
 10
+
+# a Top-N query keeps skipping files next to an expression filter
+query I
+SELECT k FROM dl.t WHERE month(ts) = 2 ORDER BY k DESC LIMIT 1
+----
+1671
+
+# inlined and transaction-local rows are read while the files are ruled out
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 't')
+
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMP '2026-10-01', NULL, 10000)
+
+query I
+SELECT k FROM dl.t WHERE month(ts) = 10
+----
+10000
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMP '2026-09-01', NULL, 9000)
+
+query I
+SELECT k FROM dl.t WHERE month(ts) = 9
+----
+9000
+
+query I
+DELETE FROM dl.t WHERE month(ts) = 2
+----
+672
+
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2
+----
+0
+
+statement ok
+ROLLBACK
+
+# a file that the filter rules out is never opened, so only the queries that read a missing file fail
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_data_file SET path = path || '.missing'
+WHERE data_file_id = (SELECT min(data_file_id) FROM __ducklake_metadata_dl.ducklake_data_file)
+
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2
+----
+672
+
+statement error
+SELECT count(*) FROM dl.t WHERE month(ts) = 1
+----
+Cannot open file

@@ -16,6 +16,8 @@ namespace duckdb {
 class DuckLakeMultiFileList;
 struct DuckLakeDeleteMap;
 class DuckLakeFieldData;
+struct DuckLakeFileListEntry;
+struct FilterPushdownInfo;
 
 struct DuckLakeMultiFileReaderGlobalState : public MultiFileReaderGlobalState {
 	DuckLakeMultiFileReaderGlobalState(const MultiFileList &file_list_p, optional_idx deletion_scan_snapshot_col_p,
@@ -102,6 +104,9 @@ public:
 	void FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data, BaseFileReader &reader,
 	                   const MultiFileReaderData &reader_data, DataChunk &input_chunk, DataChunk &output_chunk,
 	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;
+
+	static bool CanSkipFileByFilter(const DuckLakeFileListEntry &file_entry, const FilterPushdownInfo &filter_info,
+	                                ClientContext &context, bool dynamic_only);
 
 	static vector<MultiFileColumnDefinition> ColumnsFromFieldData(const DuckLakeFieldData &field_data,
 	                                                              bool emit_key_value = false);

@@ -168,13 +168,17 @@ static bool CanSkipFileByStatistics(const DuckLakeFileColumnStats &file_stats, c
 	       prune_result == FilterPropagateResult::FILTER_FALSE_OR_NULL;
 }
 
-static bool CanSkipFileByRuntimeFilter(const DuckLakeFileListEntry &file_entry, const FilterPushdownInfo &filter_info,
-                                       ClientContext &context) {
+bool DuckLakeMultiFileReader::CanSkipFileByFilter(const DuckLakeFileListEntry &file_entry,
+                                                  const FilterPushdownInfo &filter_info, ClientContext &context,
+                                                  bool dynamic_only) {
 	if (file_entry.data_type != DuckLakeDataType::DATA_FILE) {
 		return false;
 	}
 	for (auto &entry : filter_info.column_filters) {
 		const auto &column_filter = entry.second;
+		if (dynamic_only && !ExpressionFilter::GetOptionalDynamicFilterData(*column_filter.table_filter)) {
+			continue;
+		}
 		auto stats_entry = file_entry.column_min_max.find(column_filter.column_field_index);
 		if (stats_entry == file_entry.column_min_max.end()) {
 			continue;
@@ -328,7 +332,8 @@ DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const Mul
 		}
 	}
 	file_list.Cast<DuckLakeMultiFileList>().SetProjection(std::move(projection));
-	file_list.Cast<DuckLakeMultiFileList>().GetFiles();
+	// Files that the filters rule out by their stats are pruned here, so that no reader opens them.
+	file_list.Cast<DuckLakeMultiFileList>().PruneFilesByFilter(context);
 
 	optional_idx deletion_scan_snapshot_col;
 	optional_idx deletion_scan_file_row_number_col;
@@ -360,7 +365,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	}
 	if (file_list.GetFilterInfo()) {
 		auto &filter_info = *file_list.GetFilterInfo();
-		if (CanSkipFileByRuntimeFilter(file_entry, filter_info, context)) {
+		// the static filters already pruned the file list, only the dynamic ones can rule out more files here
+		if (CanSkipFileByFilter(file_entry, filter_info, context, true)) {
 			return ReaderInitializeType::SKIP_READING_FILE;
 		}
 	}

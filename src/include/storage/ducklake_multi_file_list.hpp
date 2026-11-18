@@ -43,6 +43,12 @@ public:
 	unique_ptr<MultiFileList> Copy() const override;
 	vector<DuckLakeFileListExtendedEntry> GetFilesExtended() const;
 	const vector<DuckLakeFileListEntry> &GetFiles() const;
+	//! Prune the files that the filters rule out by their stats, before any reader opens them
+	void PruneFilesByFilter(ClientContext &context) const;
+	//! The number of files pruned by their stats
+	idx_t GetPrunedFileCount() const {
+		return pruned_file_count;
+	}
 	//! Sets the columns that the scan reads (field ids of top-level columns), before the file list is read: metadata
 	//! managers that return the inlined rows with the file list only have to return these columns
 	void SetProjection(vector<DuckLakeProjectedColumn> columns) const;
@@ -121,6 +127,7 @@ private:
 	//! The set of files to read
 	mutable vector<DuckLakeFileListEntry> files;
 	mutable bool read_file_list;
+	mutable idx_t pruned_file_count = 0;
 	//! The set of transaction-local files
 	vector<DuckLakeDataFile> transaction_local_files;
 	//! Inlined transaction-local data

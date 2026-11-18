@@ -57,7 +57,7 @@ static void DuckLakeGetMetrics(TableFunctionGetMetricsInput &input) {
 	auto files_loaded = gstate.file_index.load();
 	auto &files = file_list.GetFiles();
 	idx_t data_files_read = 0;
-	idx_t data_files_skipped = 0;
+	idx_t data_files_skipped = file_list.GetPrunedFileCount();
 	idx_t inlined_tables_read = 0;
 	lock_guard<mutex> guard(gstate.lock); // guards gstate.readers
 	for (idx_t i = 0; i < files_loaded && i < files.size() && i < gstate.readers.size(); i++) {

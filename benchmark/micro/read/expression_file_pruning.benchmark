@@ -1,0 +1,21 @@
+# name: benchmark/micro/read/expression_file_pruning.benchmark
+# description: Skip Parquet opens using an expression over disjoint timestamp ranges
+# group: [read]
+
+name Expression File Pruning
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/many_files.benchmark.in
+
+run
+SELECT sum(id) FROM lake.events WHERE month(ts) = 2;
+
+result_query I
+SELECT * FROM __answer
+----
+9850013467200
