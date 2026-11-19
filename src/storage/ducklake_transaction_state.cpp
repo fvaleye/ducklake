@@ -890,10 +890,7 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 				}
 
 				if (!compacted_file.delete_files.empty()) {
-					file_info.delete_file_path = compacted_file.delete_files.back().data.path;
 					file_info.delete_file_id = compacted_file.delete_files.back().delete_file_id;
-					file_info.start_snapshot = compacted_file.file.begin_snapshot;
-					file_info.delete_file_start_snapshot = commit_snapshot.snapshot_id;
 					file_info.delete_file_end_snapshot = compacted_file.delete_files.back().end_snapshot;
 				}
 				result.compacted_files.push_back(std::move(file_info));

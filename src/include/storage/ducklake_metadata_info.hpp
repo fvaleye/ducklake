@@ -566,11 +566,8 @@ struct DuckLakeCompactedFileInfo {
 	DataFileIndex new_id;
 	optional_idx rewrite_snapshot;
 	//! Info on delete files, in case the compaction is a delete-rewrite
-	string delete_file_path;
 	DataFileIndex delete_file_id;
-	optional_idx start_snapshot;
 	TableIndex table_index;
-	optional_idx delete_file_start_snapshot;
 	optional_idx delete_file_end_snapshot;
 };
 
